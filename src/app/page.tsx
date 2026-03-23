@@ -1,65 +1,159 @@
-import Image from "next/image";
+'use client'
+
+import { useState, useEffect, useCallback } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
+import { Key, X, Loader2, Settings, ArrowRight, Check, AlertCircle } from 'lucide-react'
+import { SwapCard } from '@/components/SwapCard'
+import { WidgetThemeProvider, useSystemDarkMode } from '@/components/WidgetThemeProvider'
+import type { WidgetConfig } from '@/types/widget'
 
 export default function Home() {
+  const [keyInput, setKeyInput] = useState('')
+  const [activeConfig, setActiveConfig] = useState<WidgetConfig | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [configName, setConfigName] = useState<string | null>(null)
+  const systemDark = useSystemDarkMode()
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const keyFromUrl = params.get('key')
+    if (keyFromUrl) {
+      setKeyInput(keyFromUrl)
+      loadConfig(keyFromUrl)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const loadConfig = useCallback(async (key: string) => {
+    if (!key.trim()) return
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/config/${encodeURIComponent(key.trim())}`)
+      if (!res.ok) {
+        setError(res.status === 404 ? 'Configuration not found' : 'Failed to load configuration')
+        setActiveConfig(null)
+        setConfigName(null)
+        return
+      }
+      const data = await res.json()
+      setActiveConfig(data.config)
+      setConfigName(data.name || null)
+    } catch {
+      setError('Failed to load configuration')
+      setActiveConfig(null)
+      setConfigName(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const clearConfig = useCallback(() => {
+    setKeyInput('')
+    setActiveConfig(null)
+    setConfigName(null)
+    setError(null)
+    window.history.replaceState({}, '', '/')
+  }, [])
+
+  const handleSubmit = useCallback((e: React.FormEvent) => {
+    e.preventDefault()
+    if (keyInput.trim()) {
+      loadConfig(keyInput)
+      window.history.replaceState({}, '', `/?key=${encodeURIComponent(keyInput.trim())}`)
+    }
+  }, [keyInput, loadConfig])
+
+  const widget = <SwapCard />
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <div className="flex flex-col items-center justify-center min-h-screen p-4 gap-4">
+      {/* Integrator key bar */}
+      <div className="w-full max-w-[440px] space-y-2">
+        <form onSubmit={handleSubmit} className="relative">
+          <div className="card-elevated flex items-center gap-2 px-3 py-2">
+            <Key className="w-4 h-4 text-[var(--text-muted)] shrink-0" />
+            <input
+              type="text"
+              value={keyInput}
+              onChange={e => setKeyInput(e.target.value)}
+              placeholder="Paste integrator key to preview…"
+              className="flex-1 bg-transparent text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none font-[family-name:var(--font-ibm-plex-mono)] min-w-0"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            {loading && <Loader2 className="w-4 h-4 text-[var(--accent)] animate-spin shrink-0" />}
+            {activeConfig && !loading && (
+              <button
+                type="button"
+                onClick={clearConfig}
+                className="p-1 rounded-lg hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4 text-[var(--text-muted)]" />
+              </button>
+            )}
+            {!activeConfig && !loading && keyInput && (
+              <button
+                type="submit"
+                className="p-1 rounded-lg hover:bg-[var(--accent-wash)] transition-colors cursor-pointer"
+              >
+                <ArrowRight className="w-4 h-4 text-[var(--accent)]" />
+              </button>
+            )}
+          </div>
+        </form>
+
+        <AnimatePresence>
+          {activeConfig && configName && (
+            <motion.div
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -5 }}
+              className="flex items-center gap-2 px-3 py-1.5"
+            >
+              <Check className="w-3 h-3 text-[var(--success)]" />
+              <span className="text-[11px] text-[var(--text-muted)]">
+                Previewing: <span className="text-[var(--text-secondary)] font-medium">{configName}</span>
+              </span>
+            </motion.div>
+          )}
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -5 }}
+              className="flex items-center gap-2 px-3 py-1.5"
+            >
+              <AlertCircle className="w-3 h-3 text-[var(--error)]" />
+              <span className="text-[11px] text-[var(--error)]">{error}</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Widget */}
+      {activeConfig ? (
+        <div
+          className="rounded-2xl p-4 transition-colors duration-300"
+          style={{ background: (activeConfig.colorMode === 'dark' || (activeConfig.colorMode === 'auto' && systemDark)) ? '#161720' : '#F0F1F7' }}
+        >
+          <WidgetThemeProvider config={activeConfig}>
+            <div style={{ fontFamily: 'var(--font-body)' }}>
+              {widget}
+            </div>
+          </WidgetThemeProvider>
         </div>
-      </main>
+      ) : (
+        widget
+      )}
+
+      {/* Setup link */}
+      <a
+        href="/setup"
+        className="inline-flex items-center gap-2 text-sm text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors mt-2"
+      >
+        <Settings className="w-4 h-4" />
+        Configure your widget
+      </a>
     </div>
-  );
+  )
 }

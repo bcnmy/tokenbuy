@@ -1,26 +1,214 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg-deep: #F0F1F7;
+  --bg-base: #F6F7FB;
+  --surface: #FFFFFF;
+  --surface-2: #F0F2F8;
+  --surface-3: #E6E9F2;
+  --border: #E0E4EF;
+  --border-light: #ECEEF5;
+
+  --accent: #7C6AEF;
+  --accent-light: #9B8DF5;
+  --accent-wash: #EDEAFD;
+  --accent-secondary: #F59E8F;
+  --accent-secondary-wash: #FDF0EE;
+  --accent-tertiary: #5CC9B8;
+  --accent-tertiary-wash: #E6F7F4;
+
+  --error: #EF6461;
+  --error-wash: #FDF0F0;
+  --warning: #F5B544;
+  --warning-wash: #FDF6E8;
+  --success: #5CC9B8;
+  --success-wash: #E6F7F4;
+
+  --text-primary: #1C1F37;
+  --text-secondary: #6B7194;
+  --text-muted: #A0A6C4;
+  --text-on-accent: #FFFFFF;
+
+  --font-body: 'Sora', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SF Mono', monospace;
+
+  --shadow-sm: 0 1px 2px rgba(28, 31, 55, 0.04), 0 1px 3px rgba(28, 31, 55, 0.03);
+  --shadow-md: 0 2px 8px rgba(28, 31, 55, 0.06), 0 4px 16px rgba(28, 31, 55, 0.04);
+  --shadow-lg: 0 4px 16px rgba(28, 31, 55, 0.06), 0 12px 40px rgba(28, 31, 55, 0.06);
+  --shadow-xl: 0 8px 24px rgba(28, 31, 55, 0.08), 0 24px 64px rgba(28, 31, 55, 0.08);
+  --shadow-accent: 0 4px 16px rgba(124, 106, 239, 0.2), 0 2px 4px rgba(124, 106, 239, 0.12);
+  --shadow-accent-hover: 0 6px 20px rgba(124, 106, 239, 0.3), 0 2px 6px rgba(124, 106, 239, 0.15);
+
+  --radius-card: 24px;
+  --radius-btn: 14px;
+  --radius-input: 16px;
+}
+
+:root.dark {
+  --bg-deep: #0F1017;
+  --bg-base: #161720;
+  --surface: #1E1F2B;
+  --surface-2: #262736;
+  --surface-3: #2F3042;
+  --border: #363850;
+  --border-light: #2A2C40;
+
+  --accent-wash: #1E1A3D;
+  --accent-secondary-wash: #2D1D1A;
+  --accent-tertiary-wash: #152825;
+
+  --error-wash: #2D1717;
+  --warning-wash: #2D2517;
+  --success-wash: #152825;
+
+  --text-primary: #E8E9F0;
+  --text-secondary: #9498B5;
+  --text-muted: #5E6280;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2), 0 1px 3px rgba(0, 0, 0, 0.15);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.25), 0 4px 16px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.3), 0 12px 40px rgba(0, 0, 0, 0.25);
+  --shadow-xl: 0 8px 24px rgba(0, 0, 0, 0.35), 0 24px 64px rgba(0, 0, 0, 0.3);
+  --shadow-accent: 0 4px 16px rgba(124, 106, 239, 0.15), 0 2px 4px rgba(124, 106, 239, 0.08);
+  --shadow-accent-hover: 0 6px 20px rgba(124, 106, 239, 0.22), 0 2px 6px rgba(124, 106, 239, 0.1);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--bg-base);
+  --color-foreground: var(--text-primary);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px) scale(1); }
+  50% { transform: translateY(-20px) scale(1.02); }
+}
+
+@keyframes float-slow {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(10px, -15px) scale(1.01); }
+  50% { transform: translate(-5px, -25px) scale(1.03); }
+  75% { transform: translate(-15px, -10px) scale(1.01); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.ambient-bg {
+  position: relative;
+  overflow: hidden;
+}
+
+.ambient-bg::before,
+.ambient-bg::after {
+  content: '';
+  position: fixed;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(80px);
+  opacity: 0.5;
+}
+
+.ambient-bg::before {
+  width: 600px;
+  height: 600px;
+  top: -10%;
+  right: -5%;
+  background: radial-gradient(circle, var(--accent-wash) 0%, transparent 70%);
+  animation: float-slow 20s ease-in-out infinite;
+}
+
+.ambient-bg::after {
+  width: 500px;
+  height: 500px;
+  bottom: -5%;
+  left: -5%;
+  background: radial-gradient(circle, var(--accent-secondary-wash) 0%, transparent 70%);
+  animation: float-slow 25s ease-in-out infinite reverse;
+}
+
+.card-elevated {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  border: var(--card-border, 1px solid var(--border-light));
+  box-shadow: var(--shadow-card, var(--shadow-lg));
+}
+
+.btn-primary {
+  background: var(--btn-primary-bg, var(--accent));
+  color: var(--btn-primary-color, var(--text-on-accent));
+  font-weight: 600;
+  border-radius: var(--radius-btn);
+  border: var(--btn-primary-border, none);
+  box-shadow: var(--btn-primary-shadow, var(--shadow-accent));
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-primary:hover {
+  filter: brightness(1.06);
+  box-shadow: var(--btn-primary-shadow-hover, var(--shadow-accent-hover));
+  transform: translateY(-1px);
+}
+
+.btn-primary:active {
+  transform: scale(0.98) translateY(0);
+}
+
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-weight: 600;
+  border-radius: var(--radius-btn);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-secondary:hover {
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+
+.input-field {
+  background: var(--input-bg, var(--surface-2));
+  border: var(--input-border, 1.5px solid var(--border-light));
+  border-radius: var(--radius-input);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.input-field:focus-within {
+  border-color: var(--accent-light);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+  background: var(--surface);
+}
+
+.dot-pattern {
+  background-image: radial-gradient(circle at 1px 1px, var(--border) 0.5px, transparent 0);
+  background-size: 24px 24px;
 }
