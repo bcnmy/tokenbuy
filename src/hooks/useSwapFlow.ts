@@ -306,8 +306,8 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
       walletAddress: state.recipientAddress,
     })
 
-    dispatch({ type: 'SET_LOADING', loading: true })
     dispatch({ type: 'SET_ERROR', error: null })
+    dispatch({ type: 'SET_LOADING', loading: true })
 
     try {
       const quote = await fetchQuote({
@@ -348,8 +348,8 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
   ])
 
   const startMoneriumAuth = useCallback(async () => {
-    dispatch({ type: 'SET_LOADING', loading: true })
     dispatch({ type: 'SET_ERROR', error: null })
+    dispatch({ type: 'SET_LOADING', loading: true })
 
     logger.logInfo('monerium', 'auth_initiated', {
       walletAddress: state.recipientAddress,

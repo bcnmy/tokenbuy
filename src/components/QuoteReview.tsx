@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'motion/react'
-import { ArrowRightLeft, Receipt, Zap, Globe, Percent, Clock, Info, ArrowRight, ArrowLeft, Loader2, Route } from 'lucide-react'
+import { ArrowRightLeft, Info, ArrowRight, ArrowLeft, Loader2 } from 'lucide-react'
 import type { SwapQuote } from '@/types'
 import { FIAT_SYMBOLS } from '@/constants/tokens'
 import { getChainName } from '@/services/bungee'
@@ -30,7 +30,7 @@ function Row({ label, value, accent, icon: Icon }: { label: string; value: strin
 }
 
 export function QuoteReview({ quote, onConfirm, onBack, isLoading }: QuoteReviewProps) {
-  const { params, tokenAmount, minTokenAmount, fees, exchangeRate, priceImpact, estimatedTime, routeName } = quote
+  const { params, tokenAmount, minTokenAmount, exchangeRate } = quote
   const symbol = FIAT_SYMBOLS[params.fiatCurrency]
 
   return (
@@ -63,30 +63,12 @@ export function QuoteReview({ quote, onConfirm, onBack, isLoading }: QuoteReview
 
       <div className="bg-[var(--surface-2)] rounded-2xl p-3 border border-[var(--border-light)]">
         <Row label="Exchange rate" value={exchangeRate} icon={ArrowRightLeft} />
-        <div className="h-px bg-[var(--border-light)]" />
-        <Row label="Onramp fee (Monerium)" value={fees.onramp} accent icon={Receipt} />
-        <Row label="Bridge / swap fee" value={fees.bridgeSwap} icon={Zap} />
-        <Row label="Network fee" value={fees.network} icon={Globe} />
-        <div className="h-px bg-[var(--border-light)]" />
-        <Row label="Total fees" value={`${fees.total} (${fees.totalPercent})`} icon={Receipt} />
-        <Row label="Price impact" value={priceImpact} icon={Percent} />
-        <Row label="Est. time" value={estimatedTime} icon={Clock} />
-        {routeName && (
-          <Row label="Route" value={routeName} icon={Route} />
-        )}
         {minTokenAmount && minTokenAmount !== tokenAmount && (
-          <Row label="Min. received" value={`${minTokenAmount} ${params.token.symbol}`} icon={Info} />
+          <>
+            <div className="h-px bg-[var(--border-light)]" />
+            <Row label="Min. received" value={`${minTokenAmount} ${params.token.symbol}`} icon={Info} />
+          </>
         )}
-      </div>
-
-      <div className="bg-[var(--accent-wash)] border border-[var(--accent)]/15 rounded-xl p-3">
-        <p className="text-[11px] text-[var(--accent)] font-medium leading-relaxed inline-flex items-start gap-2">
-          <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" strokeWidth={2} />
-          <span>
-            0% onramp fee via Monerium. EUR converts 1:1 to EURe on-chain,
-            then swaps to {params.token.symbol} via Bungee cross-chain routing.
-          </span>
-        </p>
       </div>
 
       <div className="flex gap-3">

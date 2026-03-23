@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getDb } from '@/lib/db'
+import { getDb, ensureMigrations } from '@/lib/db'
 import {
   exchangeCodeForTokens,
   getAuthContext,
@@ -8,11 +8,6 @@ import {
   MONERIUM_CHAIN,
 } from '@/lib/monerium'
 import { logInfo, logWarn, logError } from '@/lib/logger'
-
-type AuthStateRow = {
-  code_verifier: string
-  wallet_address: string
-}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -24,7 +19,7 @@ export async function GET(request: Request) {
   const baseUrl = new URL(request.url).origin
 
   if (error) {
-    logWarn('monerium', 'monerium_callback_error_param', {
+    await logWarn('monerium', 'monerium_callback_error_param', {
       error,
       errorDescription: errorDescription ?? undefined,
     })
@@ -33,38 +28,44 @@ export async function GET(request: Request) {
   }
 
   if (!code || !state) {
-    logWarn('monerium', 'monerium_callback_missing_params', {
+    await logWarn('monerium', 'monerium_callback_missing_params', {
       hasCode: !!code,
       hasState: !!state,
     })
     return NextResponse.redirect(`${baseUrl}/?monerium=error&message=Missing+authorization+code`)
   }
 
+  await ensureMigrations()
   const db = getDb()
 
-  const authState = db
-    .prepare('SELECT code_verifier, wallet_address FROM monerium_auth_state WHERE state = ?')
-    .get(state) as AuthStateRow | undefined
+  const authResult = await db.execute({
+    sql: 'SELECT code_verifier, wallet_address FROM monerium_auth_state WHERE state = ?',
+    args: [state],
+  })
+  const authState = authResult.rows[0]
 
   if (!authState) {
-    logWarn('monerium', 'monerium_callback_invalid_state', { state })
+    await logWarn('monerium', 'monerium_callback_invalid_state', { state })
     return NextResponse.redirect(`${baseUrl}/?monerium=error&message=Invalid+or+expired+state`)
   }
 
-  const walletAddress = authState.wallet_address
-  logInfo('monerium', 'monerium_callback_processing', { walletAddress, state })
+  const walletAddress = authState.wallet_address as string
+  await logInfo('monerium', 'monerium_callback_processing', { walletAddress, state })
 
-  db.prepare('DELETE FROM monerium_auth_state WHERE state = ?').run(state)
+  await db.execute({
+    sql: 'DELETE FROM monerium_auth_state WHERE state = ?',
+    args: [state],
+  })
 
   try {
-    const tokens = await exchangeCodeForTokens(code, authState.code_verifier)
-    logInfo('monerium', 'monerium_tokens_exchanged', { walletAddress })
+    const tokens = await exchangeCodeForTokens(code, authState.code_verifier as string)
+    await logInfo('monerium', 'monerium_tokens_exchanged', { walletAddress })
 
     const context = await getAuthContext(tokens.access_token)
     const profileId = context.defaultProfile
     const email = context.email
 
-    logInfo('monerium', 'monerium_auth_context_fetched', {
+    await logInfo('monerium', 'monerium_auth_context_fetched', {
       walletAddress,
       profileId,
       hasEmail: !!email,
@@ -72,35 +73,38 @@ export async function GET(request: Request) {
 
     const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
 
-    const existing = db
-      .prepare('SELECT id FROM monerium_profiles WHERE wallet_address = ?')
-      .get(walletAddress) as { id: number } | undefined
+    const existingResult = await db.execute({
+      sql: 'SELECT id FROM monerium_profiles WHERE wallet_address = ?',
+      args: [walletAddress],
+    })
 
-    if (existing) {
-      db.prepare(
-        `UPDATE monerium_profiles SET
+    if (existingResult.rows[0]) {
+      await db.execute({
+        sql: `UPDATE monerium_profiles SET
           email = ?, profile_id = ?, profile_state = 'approved',
           access_token = ?, refresh_token = ?, token_expires_at = ?,
           updated_at = datetime('now')
         WHERE wallet_address = ?`,
-      ).run(
-        email, profileId,
-        tokens.access_token, tokens.refresh_token, expiresAt,
-        walletAddress,
-      )
+        args: [
+          email, profileId,
+          tokens.access_token, tokens.refresh_token, expiresAt,
+          walletAddress,
+        ],
+      })
     } else {
-      db.prepare(
-        `INSERT INTO monerium_profiles
+      await db.execute({
+        sql: `INSERT INTO monerium_profiles
           (wallet_address, email, profile_id, profile_state, access_token, refresh_token, token_expires_at, chain)
         VALUES (?, ?, ?, 'approved', ?, ?, ?, ?)`,
-      ).run(
-        walletAddress, email, profileId,
-        tokens.access_token, tokens.refresh_token, expiresAt,
-        MONERIUM_CHAIN,
-      )
+        args: [
+          walletAddress, email, profileId,
+          tokens.access_token, tokens.refresh_token, expiresAt,
+          MONERIUM_CHAIN,
+        ],
+      })
     }
 
-    logInfo('monerium', 'monerium_profile_stored', { walletAddress, profileId, isUpdate: !!existing })
+    await logInfo('monerium', 'monerium_profile_stored', { walletAddress, profileId, isUpdate: !!existingResult.rows[0] })
 
     let iban: string | null = null
     let bic: string | null = null
@@ -114,7 +118,7 @@ export async function GET(request: Request) {
       if (matching) {
         iban = matching.iban
         bic = matching.bic
-        logInfo('monerium', 'monerium_existing_iban_found', { walletAddress, iban })
+        await logInfo('monerium', 'monerium_existing_iban_found', { walletAddress, iban })
       } else {
         const newIban = await requestIBAN(tokens.access_token, {
           address: walletAddress,
@@ -122,24 +126,25 @@ export async function GET(request: Request) {
         })
         iban = newIban.iban
         bic = newIban.bic
-        logInfo('monerium', 'monerium_new_iban_requested', { walletAddress, iban })
+        await logInfo('monerium', 'monerium_new_iban_requested', { walletAddress, iban })
       }
 
       if (iban) {
-        db.prepare(
-          "UPDATE monerium_profiles SET iban = ?, bic = ?, updated_at = datetime('now') WHERE wallet_address = ?",
-        ).run(iban, bic, walletAddress)
+        await db.execute({
+          sql: "UPDATE monerium_profiles SET iban = ?, bic = ?, updated_at = datetime('now') WHERE wallet_address = ?",
+          args: [iban, bic, walletAddress],
+        })
       }
     } catch (ibanErr) {
-      logError('monerium', 'monerium_iban_after_auth_failed', ibanErr, { walletAddress })
+      await logError('monerium', 'monerium_iban_after_auth_failed', ibanErr, { walletAddress })
     }
 
-    logInfo('monerium', 'monerium_callback_success', { walletAddress, hasIban: !!iban })
+    await logInfo('monerium', 'monerium_callback_success', { walletAddress, hasIban: !!iban })
 
     const wallet = encodeURIComponent(walletAddress)
     return NextResponse.redirect(`${baseUrl}/?monerium=success&wallet=${wallet}`)
   } catch (err) {
-    logError('monerium', 'monerium_callback_error', err, { walletAddress })
+    await logError('monerium', 'monerium_callback_error', err, { walletAddress })
     const msg = encodeURIComponent(err instanceof Error ? err.message : 'Authorization failed')
     return NextResponse.redirect(`${baseUrl}/?monerium=error&message=${msg}`)
   }

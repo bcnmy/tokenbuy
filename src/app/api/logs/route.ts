@@ -17,11 +17,6 @@ type IncomingLog = {
   timestamp?: string
 }
 
-/**
- * POST /api/logs
- *
- * Receives a batch of client-side logs and persists them.
- */
 export async function POST(request: Request) {
   try {
     const body = await request.json()
@@ -47,7 +42,7 @@ export async function POST(request: Request) {
         metadata.clientTimestamp = entry.timestamp
       }
 
-      log({
+      await log({
         level,
         category,
         event: entry.event,
@@ -68,16 +63,11 @@ export async function POST(request: Request) {
   }
 }
 
-/**
- * GET /api/logs?sessionId=...&walletAddress=...&category=...&level=...&since=...&limit=...&offset=...
- *
- * Retrieves stored logs for debugging.
- */
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
 
-    const rows = queryLogs({
+    const rows = await queryLogs({
       sessionId: searchParams.get('sessionId') ?? undefined,
       walletAddress: searchParams.get('walletAddress') ?? undefined,
       category: (searchParams.get('category') as LogCategory) ?? undefined,

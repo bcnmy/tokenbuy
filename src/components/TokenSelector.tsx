@@ -184,6 +184,17 @@ export function TokenSelectorPanel({ isOpen, selected, onSelect, onClose }: Toke
     })
   }, [tokens, search, chainFilter])
 
+  const sortedChains = useMemo(() => {
+    const preferredOrder = [1, 8453, 42161, 137, 56]
+    const priorityIndex = (c: Chain) => {
+      const idx = preferredOrder.indexOf(c.chainId)
+      if (idx !== -1) return idx
+      if (c.name.toLowerCase().includes('hyper')) return preferredOrder.length
+      return preferredOrder.length + 1
+    }
+    return [...chains].sort((a, b) => priorityIndex(a) - priorityIndex(b))
+  }, [chains])
+
   const popularTokens = useMemo(() => tokens.slice(0, 5), [tokens])
 
   const handleClose = useCallback(() => {
@@ -250,7 +261,7 @@ export function TokenSelectorPanel({ isOpen, selected, onSelect, onClose }: Toke
               </div>
             </div>
 
-            {chains.length > 0 && (
+            {sortedChains.length > 0 && (
               <div className="px-5 pb-2 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
                 <button
                   type="button"
@@ -266,7 +277,7 @@ export function TokenSelectorPanel({ isOpen, selected, onSelect, onClose }: Toke
                 >
                   All
                 </button>
-                {chains.map((chain) => (
+                {sortedChains.map((chain) => (
                   <button
                     key={chain.chainId}
                     type="button"

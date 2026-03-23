@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getDb } from '@/lib/db'
+import { getDb, ensureMigrations } from '@/lib/db'
 import { logInfo, logError } from '@/lib/logger'
 
 export async function POST(request: Request) {
@@ -7,21 +7,23 @@ export async function POST(request: Request) {
     const payload = await request.json()
     const { event, profile, iban, order } = payload
 
-    logInfo('webhook', 'monerium_webhook_received', {
+    await logInfo('webhook', 'monerium_webhook_received', {
       event,
       profileId: profile?.id,
       ibanProfile: iban?.profile,
       orderId: order?.id,
     })
 
+    await ensureMigrations()
     const db = getDb()
 
     if (event === 'profile.updated' && profile?.id) {
-      db.prepare(
-        "UPDATE monerium_profiles SET profile_state = ?, updated_at = datetime('now') WHERE profile_id = ?",
-      ).run(profile.state || 'pending', profile.id)
+      await db.execute({
+        sql: "UPDATE monerium_profiles SET profile_state = ?, updated_at = datetime('now') WHERE profile_id = ?",
+        args: [profile.state || 'pending', profile.id],
+      })
 
-      logInfo('webhook', 'monerium_profile_updated', {
+      await logInfo('webhook', 'monerium_profile_updated', {
         profileId: profile.id,
         state: profile.state,
       })
@@ -29,11 +31,12 @@ export async function POST(request: Request) {
 
     if (event === 'iban.updated' && iban?.profile) {
       if (iban.iban) {
-        db.prepare(
-          "UPDATE monerium_profiles SET iban = ?, bic = ?, iban_state = ?, updated_at = datetime('now') WHERE profile_id = ?",
-        ).run(iban.iban, iban.bic || null, iban.state || null, iban.profile)
+        await db.execute({
+          sql: "UPDATE monerium_profiles SET iban = ?, bic = ?, updated_at = datetime('now') WHERE profile_id = ?",
+          args: [iban.iban, iban.bic || null, iban.profile],
+        })
 
-        logInfo('webhook', 'monerium_iban_updated', {
+        await logInfo('webhook', 'monerium_iban_updated', {
           profileId: iban.profile,
           iban: iban.iban,
           ibanState: iban.state,
@@ -42,7 +45,7 @@ export async function POST(request: Request) {
     }
 
     if ((event === 'order.created' || event === 'order.updated') && order) {
-      logInfo('webhook', 'monerium_order_event', {
+      await logInfo('webhook', 'monerium_order_event', {
         event,
         orderId: order.id,
         kind: order.kind,
@@ -54,7 +57,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true })
   } catch (err) {
-    logError('webhook', 'monerium_webhook_error', err)
+    await logError('webhook', 'monerium_webhook_error', err)
     return NextResponse.json(
       { error: 'Webhook processing failed' },
       { status: 500 },

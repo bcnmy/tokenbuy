@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getDb } from '@/lib/db'
+import { getDb, ensureMigrations } from '@/lib/db'
 import {
   generateCodeVerifier,
   generateCodeChallenge,
@@ -19,16 +19,19 @@ export async function POST(request: Request) {
       )
     }
 
-    logInfo('monerium', 'monerium_auth_requested', { walletAddress, hasEmail: !!email })
+    await logInfo('monerium', 'monerium_auth_requested', { walletAddress, hasEmail: !!email })
 
+    await ensureMigrations()
     const db = getDb()
 
-    const existing = db
-      .prepare('SELECT iban, bic FROM monerium_profiles WHERE wallet_address = ? AND iban IS NOT NULL')
-      .get(walletAddress) as { iban: string; bic: string } | undefined
+    const result = await db.execute({
+      sql: 'SELECT iban, bic FROM monerium_profiles WHERE wallet_address = ? AND iban IS NOT NULL',
+      args: [walletAddress],
+    })
+    const existing = result.rows[0]
 
     if (existing) {
-      logInfo('monerium', 'monerium_already_onboarded', { walletAddress, hasIban: true })
+      await logInfo('monerium', 'monerium_already_onboarded', { walletAddress, hasIban: true })
       return NextResponse.json({
         alreadyOnboarded: true,
         iban: existing.iban,
@@ -40,9 +43,10 @@ export async function POST(request: Request) {
     const codeChallenge = generateCodeChallenge(codeVerifier)
     const state = generateState()
 
-    db.prepare(
-      'INSERT OR REPLACE INTO monerium_auth_state (state, code_verifier, wallet_address) VALUES (?, ?, ?)',
-    ).run(state, codeVerifier, walletAddress)
+    await db.execute({
+      sql: 'INSERT OR REPLACE INTO monerium_auth_state (state, code_verifier, wallet_address) VALUES (?, ?, ?)',
+      args: [state, codeVerifier, walletAddress],
+    })
 
     const authUrl = buildAuthUrl({
       codeChallenge,
@@ -52,10 +56,10 @@ export async function POST(request: Request) {
       chain: MONERIUM_CHAIN,
     })
 
-    logInfo('monerium', 'monerium_auth_url_generated', { walletAddress, state })
+    await logInfo('monerium', 'monerium_auth_url_generated', { walletAddress, state })
     return NextResponse.json({ authUrl })
   } catch (err) {
-    logError('monerium', 'monerium_auth_error', err)
+    await logError('monerium', 'monerium_auth_error', err)
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to start Monerium authorization' },
       { status: 500 },

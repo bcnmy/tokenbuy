@@ -1,4 +1,4 @@
-import { getDb } from './db'
+import { getDb, ensureMigrations } from './db'
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type LogCategory =
@@ -20,36 +20,38 @@ export type LogEntry = {
   metadata?: Record<string, unknown>
 }
 
-export function log(entry: LogEntry) {
-  const db = getDb()
+export async function log(entry: LogEntry) {
   try {
-    db.prepare(
-      `INSERT INTO flow_logs (level, category, event, session_id, wallet_address, metadata)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(
-      entry.level,
-      entry.category,
-      entry.event,
-      entry.sessionId ?? null,
-      entry.walletAddress ?? null,
-      entry.metadata ? JSON.stringify(entry.metadata) : null,
-    )
+    await ensureMigrations()
+    const db = getDb()
+    await db.execute({
+      sql: `INSERT INTO flow_logs (level, category, event, session_id, wallet_address, metadata)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+      args: [
+        entry.level,
+        entry.category,
+        entry.event,
+        entry.sessionId ?? null,
+        entry.walletAddress ?? null,
+        entry.metadata ? JSON.stringify(entry.metadata) : null,
+      ],
+    })
   } catch {
     console.error('[logger] failed to persist log:', entry.event)
   }
 }
 
-export function logInfo(category: LogCategory, event: string, meta?: Record<string, unknown> & { sessionId?: string; walletAddress?: string }) {
+export async function logInfo(category: LogCategory, event: string, meta?: Record<string, unknown> & { sessionId?: string; walletAddress?: string }) {
   const { sessionId, walletAddress, ...metadata } = meta ?? {}
-  log({ level: 'info', category, event, sessionId, walletAddress, metadata: Object.keys(metadata).length ? metadata : undefined })
+  await log({ level: 'info', category, event, sessionId, walletAddress, metadata: Object.keys(metadata).length ? metadata : undefined })
 }
 
-export function logWarn(category: LogCategory, event: string, meta?: Record<string, unknown> & { sessionId?: string; walletAddress?: string }) {
+export async function logWarn(category: LogCategory, event: string, meta?: Record<string, unknown> & { sessionId?: string; walletAddress?: string }) {
   const { sessionId, walletAddress, ...metadata } = meta ?? {}
-  log({ level: 'warn', category, event, sessionId, walletAddress, metadata: Object.keys(metadata).length ? metadata : undefined })
+  await log({ level: 'warn', category, event, sessionId, walletAddress, metadata: Object.keys(metadata).length ? metadata : undefined })
 }
 
-export function logError(category: LogCategory, event: string, error?: unknown, meta?: Record<string, unknown> & { sessionId?: string; walletAddress?: string }) {
+export async function logError(category: LogCategory, event: string, error?: unknown, meta?: Record<string, unknown> & { sessionId?: string; walletAddress?: string }) {
   const { sessionId, walletAddress, ...rest } = meta ?? {}
   const metadata: Record<string, unknown> = { ...rest }
   if (error instanceof Error) {
@@ -58,7 +60,7 @@ export function logError(category: LogCategory, event: string, error?: unknown, 
   } else if (error !== undefined) {
     metadata.errorMessage = String(error)
   }
-  log({ level: 'error', category, event, sessionId, walletAddress, metadata: Object.keys(metadata).length ? metadata : undefined })
+  await log({ level: 'error', category, event, sessionId, walletAddress, metadata: Object.keys(metadata).length ? metadata : undefined })
 }
 
 export type LogQueryParams = {
@@ -71,10 +73,11 @@ export type LogQueryParams = {
   offset?: number
 }
 
-export function queryLogs(params: LogQueryParams) {
+export async function queryLogs(params: LogQueryParams) {
+  await ensureMigrations()
   const db = getDb()
   const conditions: string[] = []
-  const values: unknown[] = []
+  const values: (string | number)[] = []
 
   if (params.sessionId) {
     conditions.push('session_id = ?')
@@ -101,32 +104,22 @@ export function queryLogs(params: LogQueryParams) {
   const limit = Math.min(params.limit ?? 200, 1000)
   const offset = params.offset ?? 0
 
-  const rows = db
-    .prepare(
-      `SELECT id, level, category, event, session_id, wallet_address, metadata, created_at
-       FROM flow_logs ${where}
-       ORDER BY id DESC
-       LIMIT ? OFFSET ?`,
-    )
-    .all(...values, limit, offset) as Array<{
-      id: number
-      level: string
-      category: string
-      event: string
-      session_id: string | null
-      wallet_address: string | null
-      metadata: string | null
-      created_at: string
-    }>
+  const result = await db.execute({
+    sql: `SELECT id, level, category, event, session_id, wallet_address, metadata, created_at
+          FROM flow_logs ${where}
+          ORDER BY id DESC
+          LIMIT ? OFFSET ?`,
+    args: [...values, limit, offset],
+  })
 
-  return rows.map((r) => ({
+  return result.rows.map((r) => ({
     id: r.id,
     level: r.level,
     category: r.category,
     event: r.event,
     sessionId: r.session_id,
     walletAddress: r.wallet_address,
-    metadata: r.metadata ? JSON.parse(r.metadata) : null,
+    metadata: r.metadata ? JSON.parse(r.metadata as string) : null,
     createdAt: r.created_at,
   }))
 }

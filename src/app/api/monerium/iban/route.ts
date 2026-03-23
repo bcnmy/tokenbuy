@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getDb } from '@/lib/db'
+import { getDb, ensureMigrations } from '@/lib/db'
 import {
   getIBANs,
   requestIBAN,
@@ -30,17 +30,18 @@ async function getValidToken(row: MoneriumRow, wallet: string): Promise<string |
   if (!row.refresh_token) return null
 
   try {
-    logInfo('monerium', 'monerium_token_refresh', { walletAddress: wallet })
+    await logInfo('monerium', 'monerium_token_refresh', { walletAddress: wallet })
     const tokens = await refreshAccessToken(row.refresh_token)
     const newExpiry = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
     const db = getDb()
-    db.prepare(
-      "UPDATE monerium_profiles SET access_token = ?, refresh_token = ?, token_expires_at = ?, updated_at = datetime('now') WHERE wallet_address = ?",
-    ).run(tokens.access_token, tokens.refresh_token, newExpiry, wallet)
-    logInfo('monerium', 'monerium_token_refreshed', { walletAddress: wallet })
+    await db.execute({
+      sql: "UPDATE monerium_profiles SET access_token = ?, refresh_token = ?, token_expires_at = ?, updated_at = datetime('now') WHERE wallet_address = ?",
+      args: [tokens.access_token, tokens.refresh_token, newExpiry, wallet],
+    })
+    await logInfo('monerium', 'monerium_token_refreshed', { walletAddress: wallet })
     return tokens.access_token
   } catch (err) {
-    logError('monerium', 'monerium_token_refresh_failed', err, { walletAddress: wallet })
+    await logError('monerium', 'monerium_token_refresh_failed', err, { walletAddress: wallet })
     return null
   }
 }
@@ -57,19 +58,20 @@ export async function GET(request: Request) {
       )
     }
 
-    logInfo('monerium', 'iban_requested', { walletAddress: wallet })
+    await logInfo('monerium', 'iban_requested', { walletAddress: wallet })
 
+    await ensureMigrations()
     const db = getDb()
-    const row = db
-      .prepare(
-        `SELECT profile_id, profile_state, access_token, refresh_token,
-                token_expires_at, iban, bic, chain
-         FROM monerium_profiles WHERE wallet_address = ?`,
-      )
-      .get(wallet) as MoneriumRow | undefined
+    const result = await db.execute({
+      sql: `SELECT profile_id, profile_state, access_token, refresh_token,
+              token_expires_at, iban, bic, chain
+       FROM monerium_profiles WHERE wallet_address = ?`,
+      args: [wallet],
+    })
+    const row = result.rows[0] as unknown as MoneriumRow | undefined
 
     if (!row) {
-      logInfo('monerium', 'iban_no_profile', { walletAddress: wallet })
+      await logInfo('monerium', 'iban_no_profile', { walletAddress: wallet })
       return NextResponse.json({
         iban: null,
         bic: null,
@@ -81,7 +83,7 @@ export async function GET(request: Request) {
 
     const accessToken = await getValidToken(row, wallet)
     if (!accessToken) {
-      logWarn('monerium', 'iban_no_valid_token', { walletAddress: wallet, profileState: row.profile_state })
+      await logWarn('monerium', 'iban_no_valid_token', { walletAddress: wallet, profileState: row.profile_state })
       return NextResponse.json({
         iban: null,
         bic: null,
@@ -98,7 +100,7 @@ export async function GET(request: Request) {
       )
 
       if (matching) {
-        logInfo('monerium', 'iban_found_via_api', { walletAddress: wallet, iban: matching.iban })
+        await logInfo('monerium', 'iban_found_via_api', { walletAddress: wallet, iban: matching.iban })
         return NextResponse.json({
           iban: matching.iban,
           bic: matching.bic,
@@ -109,13 +111,13 @@ export async function GET(request: Request) {
         })
       }
 
-      logInfo('monerium', 'iban_requesting_new', { walletAddress: wallet, chain: row.chain })
+      await logInfo('monerium', 'iban_requesting_new', { walletAddress: wallet, chain: row.chain })
       const newIban = await requestIBAN(accessToken, {
         address: wallet,
         chain: row.chain,
       })
 
-      logInfo('monerium', 'iban_created', { walletAddress: wallet, iban: newIban.iban })
+      await logInfo('monerium', 'iban_created', { walletAddress: wallet, iban: newIban.iban })
       return NextResponse.json({
         iban: newIban.iban,
         bic: newIban.bic,
@@ -125,7 +127,7 @@ export async function GET(request: Request) {
         needsAuth: false,
       })
     } catch (ibanErr) {
-      logError('monerium', 'iban_fetch_failed', ibanErr, { walletAddress: wallet })
+      await logError('monerium', 'iban_fetch_failed', ibanErr, { walletAddress: wallet })
       return NextResponse.json({
         iban: null,
         bic: null,
@@ -137,7 +139,7 @@ export async function GET(request: Request) {
     }
   } catch (err) {
     const wallet = new URL(request.url).searchParams.get('wallet')
-    logError('monerium', 'iban_error', err, { walletAddress: wallet ?? undefined })
+    await logError('monerium', 'iban_error', err, { walletAddress: wallet ?? undefined })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to get IBAN' },
       { status: 500 },

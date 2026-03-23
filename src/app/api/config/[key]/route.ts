@@ -1,14 +1,7 @@
 import { NextResponse } from 'next/server'
-import { getDb } from '@/lib/db'
+import { getDb, ensureMigrations } from '@/lib/db'
 import { logInfo, logWarn, logError } from '@/lib/logger'
 import { normalizeConfig } from '@/types/widget'
-
-type Row = {
-  integrator_key: string
-  name: string
-  config: string
-  created_at: string
-}
 
 export async function GET(
   _request: Request,
@@ -21,25 +14,28 @@ export async function GET(
       return NextResponse.json({ error: 'Invalid key format' }, { status: 400 })
     }
 
+    await ensureMigrations()
     const db = getDb()
-    const row = db.prepare(
-      'SELECT * FROM widget_configs WHERE integrator_key = ?'
-    ).get(key) as Row | undefined
+    const result = await db.execute({
+      sql: 'SELECT * FROM widget_configs WHERE integrator_key = ?',
+      args: [key],
+    })
+    const row = result.rows[0]
 
     if (!row) {
-      logWarn('flow', 'widget_config_not_found', { integratorKey: key })
+      await logWarn('flow', 'widget_config_not_found', { integratorKey: key })
       return NextResponse.json({ error: 'Configuration not found' }, { status: 404 })
     }
 
-    logInfo('flow', 'widget_config_loaded', { integratorKey: key, name: row.name })
+    await logInfo('flow', 'widget_config_loaded', { integratorKey: key, name: row.name as string })
     return NextResponse.json({
       integratorKey: row.integrator_key,
       name: row.name,
-      config: normalizeConfig(JSON.parse(row.config)),
+      config: normalizeConfig(JSON.parse(row.config as string)),
       createdAt: row.created_at,
     })
   } catch (err) {
-    logError('flow', 'widget_config_load_error', err)
+    await logError('flow', 'widget_config_load_error', err)
     return NextResponse.json({ error: 'Failed to fetch configuration' }, { status: 500 })
   }
 }

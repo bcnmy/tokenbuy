@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getDb } from '@/lib/db'
+import { getDb, ensureMigrations } from '@/lib/db'
 import { getApplicantByExternalId } from '@/lib/sumsub'
 import { logInfo, logError } from '@/lib/logger'
 import type { KycStatus } from '@/types'
@@ -16,15 +16,18 @@ export async function GET(request: Request) {
       )
     }
 
-    logInfo('kyc', 'kyc_status_check', { walletAddress: wallet })
+    await logInfo('kyc', 'kyc_status_check', { walletAddress: wallet })
 
+    await ensureMigrations()
     const db = getDb()
-    const row = db
-      .prepare('SELECT applicant_id, status FROM kyc_sessions WHERE wallet_address = ?')
-      .get(wallet) as { applicant_id: string; status: string } | undefined
+    const result = await db.execute({
+      sql: 'SELECT applicant_id, status FROM kyc_sessions WHERE wallet_address = ?',
+      args: [wallet],
+    })
+    const row = result.rows[0]
 
     if (row?.status === 'approved') {
-      logInfo('kyc', 'kyc_status_result', { walletAddress: wallet, status: 'approved', source: 'db_cache' })
+      await logInfo('kyc', 'kyc_status_result', { walletAddress: wallet, status: 'approved', source: 'db_cache' })
       return NextResponse.json({ status: 'approved' satisfies KycStatus })
     }
 
@@ -33,46 +36,51 @@ export async function GET(request: Request) {
 
     if (answer === 'GREEN') {
       if (row) {
-        db.prepare(
-          "UPDATE kyc_sessions SET status = 'approved', updated_at = datetime('now') WHERE wallet_address = ?",
-        ).run(wallet)
+        await db.execute({
+          sql: "UPDATE kyc_sessions SET status = 'approved', updated_at = datetime('now') WHERE wallet_address = ?",
+          args: [wallet],
+        })
       } else if (applicant) {
-        db.prepare(
-          'INSERT INTO kyc_sessions (wallet_address, applicant_id, status, review_answer) VALUES (?, ?, ?, ?)',
-        ).run(wallet, applicant.id, 'approved', 'GREEN')
+        await db.execute({
+          sql: 'INSERT INTO kyc_sessions (wallet_address, applicant_id, status, review_answer) VALUES (?, ?, ?, ?)',
+          args: [wallet, applicant.id, 'approved', 'GREEN'],
+        })
       }
-      logInfo('kyc', 'kyc_status_result', { walletAddress: wallet, status: 'approved', source: 'sumsub_api' })
+      await logInfo('kyc', 'kyc_status_result', { walletAddress: wallet, status: 'approved', source: 'sumsub_api' })
       return NextResponse.json({ status: 'approved' satisfies KycStatus })
     }
 
     if (answer === 'RED') {
       if (row) {
-        db.prepare(
-          "UPDATE kyc_sessions SET status = 'rejected', updated_at = datetime('now') WHERE wallet_address = ?",
-        ).run(wallet)
+        await db.execute({
+          sql: "UPDATE kyc_sessions SET status = 'rejected', updated_at = datetime('now') WHERE wallet_address = ?",
+          args: [wallet],
+        })
       } else if (applicant) {
-        db.prepare(
-          'INSERT INTO kyc_sessions (wallet_address, applicant_id, status, review_answer) VALUES (?, ?, ?, ?)',
-        ).run(wallet, applicant.id, 'rejected', 'RED')
+        await db.execute({
+          sql: 'INSERT INTO kyc_sessions (wallet_address, applicant_id, status, review_answer) VALUES (?, ?, ?, ?)',
+          args: [wallet, applicant.id, 'rejected', 'RED'],
+        })
       }
-      logInfo('kyc', 'kyc_status_result', { walletAddress: wallet, status: 'rejected', source: 'sumsub_api' })
+      await logInfo('kyc', 'kyc_status_result', { walletAddress: wallet, status: 'rejected', source: 'sumsub_api' })
       return NextResponse.json({ status: 'rejected' satisfies KycStatus })
     }
 
     if (applicant && !row) {
-      db.prepare(
-        'INSERT INTO kyc_sessions (wallet_address, applicant_id, status) VALUES (?, ?, ?)',
-      ).run(wallet, applicant.id, 'pending')
-      logInfo('kyc', 'kyc_status_result', { walletAddress: wallet, status: 'pending', source: 'sumsub_api', newRecord: true })
+      await db.execute({
+        sql: 'INSERT INTO kyc_sessions (wallet_address, applicant_id, status) VALUES (?, ?, ?)',
+        args: [wallet, applicant.id, 'pending'],
+      })
+      await logInfo('kyc', 'kyc_status_result', { walletAddress: wallet, status: 'pending', source: 'sumsub_api', newRecord: true })
       return NextResponse.json({ status: 'pending' satisfies KycStatus })
     }
 
     const status: KycStatus = row ? 'pending' : 'not_started'
-    logInfo('kyc', 'kyc_status_result', { walletAddress: wallet, status })
+    await logInfo('kyc', 'kyc_status_result', { walletAddress: wallet, status })
     return NextResponse.json({ status })
   } catch (err) {
     const wallet = new URL(request.url).searchParams.get('wallet')
-    logError('kyc', 'kyc_status_error', err, { walletAddress: wallet ?? undefined })
+    await logError('kyc', 'kyc_status_error', err, { walletAddress: wallet ?? undefined })
     return NextResponse.json(
       { error: 'Failed to check KYC status' },
       { status: 500 },
