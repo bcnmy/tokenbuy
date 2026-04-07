@@ -11,7 +11,7 @@ import { logInfo, logError } from '@/lib/logger'
 
 export async function POST(request: Request) {
   try {
-    const { walletAddress, email } = await request.json()
+    const { walletAddress, signature, email } = await request.json()
     if (!walletAddress) {
       return NextResponse.json(
         { error: 'walletAddress is required' },
@@ -19,25 +19,10 @@ export async function POST(request: Request) {
       )
     }
 
-    await logInfo('monerium', 'monerium_auth_requested', { walletAddress, hasEmail: !!email })
+    await logInfo('monerium', 'monerium_auth_requested', { walletAddress, hasEmail: !!email, hasSignature: !!signature })
 
     await ensureMigrations()
     const db = getDb()
-
-    const result = await db.execute({
-      sql: 'SELECT iban, bic FROM monerium_profiles WHERE wallet_address = ? AND iban IS NOT NULL',
-      args: [walletAddress],
-    })
-    const existing = result.rows[0]
-
-    if (existing) {
-      await logInfo('monerium', 'monerium_already_onboarded', { walletAddress, hasIban: true })
-      return NextResponse.json({
-        alreadyOnboarded: true,
-        iban: existing.iban,
-        bic: existing.bic,
-      })
-    }
 
     const codeVerifier = generateCodeVerifier()
     const codeChallenge = generateCodeChallenge(codeVerifier)
@@ -52,6 +37,7 @@ export async function POST(request: Request) {
       codeChallenge,
       state,
       walletAddress,
+      signature: signature || undefined,
       email: email || undefined,
       chain: MONERIUM_CHAIN,
     })

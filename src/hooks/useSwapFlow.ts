@@ -5,7 +5,6 @@ import type {
   FlowStep,
   SwapQuote,
   QuoteEstimate,
-  KycSession,
   PaymentInfo,
   Transaction,
   TransactionStatus,
@@ -14,7 +13,6 @@ import type {
   Hex,
 } from '@/types'
 import { fetchQuote, fetchEstimate } from '@/services/quote'
-import { getKycStatus } from '@/services/kyc'
 import {
   initiateMoneriumAuth,
   fetchIban,
@@ -22,10 +20,13 @@ import {
   saveFlowStateForRedirect,
   loadFlowStateAfterRedirect,
   clearFlowState,
-  simulatePaymentFlow,
+  watchForEureDeposit,
 } from '@/services/payment'
-import { DEFAULT_TOKEN } from '@/constants/tokens'
+import { getManualRouteQuote, buildBungeeTx } from '@/services/bungee'
+import { executeFusionSwap, getNexusAddress, BRIDGE_FEE_RESERVE_EUR } from '@/services/biconomy'
+import { DEFAULT_TOKEN, GBP_TO_EUR } from '@/constants/tokens'
 import * as logger from '@/services/logger'
+import type { Account, Chain, Transport, WalletClient } from 'viem'
 
 type SwapFlowState = {
   step: FlowStep
@@ -33,13 +34,16 @@ type SwapFlowState = {
   fiatAmount: string
   selectedToken: Token
   recipientAddress: string
+  signerAddress: string
+  flowId: string | null
   estimate: QuoteEstimate | null
   isEstimating: boolean
   quote: SwapQuote | null
-  kycSession: KycSession | null
   paymentInfo: PaymentInfo | null
   transaction: Transaction | null
   transactionStatus: TransactionStatus | null
+  pendingTxHash: string | null
+  isWaitingForIban: boolean
   isLoading: boolean
   error: string | null
 }
@@ -49,15 +53,18 @@ type SwapFlowAction =
   | { type: 'SET_FIAT_AMOUNT'; amount: string }
   | { type: 'SET_TOKEN'; token: Token }
   | { type: 'SET_ADDRESS'; address: string }
+  | { type: 'SET_SIGNER_ADDRESS'; address: string }
+  | { type: 'SET_FLOW_ID'; flowId: string }
   | { type: 'ESTIMATING' }
   | { type: 'SET_ESTIMATE'; estimate: QuoteEstimate | null }
   | { type: 'SET_LOADING'; loading: boolean }
   | { type: 'SET_ERROR'; error: string | null }
   | { type: 'SET_QUOTE'; quote: SwapQuote }
-  | { type: 'SET_KYC_SESSION'; session: KycSession }
   | { type: 'SET_PAYMENT_INFO'; info: PaymentInfo }
   | { type: 'SET_TRANSACTION_STATUS'; status: TransactionStatus }
+  | { type: 'SET_PENDING_TX_HASH'; hash: string }
   | { type: 'SET_TRANSACTION'; transaction: Transaction }
+  | { type: 'WAITING_FOR_IBAN' }
   | { type: 'GO_TO_STEP'; step: FlowStep }
   | { type: 'RESET' }
 
@@ -67,13 +74,16 @@ const initialState: SwapFlowState = {
   fiatAmount: '',
   selectedToken: DEFAULT_TOKEN,
   recipientAddress: '',
+  signerAddress: '',
+  flowId: null,
   estimate: null,
   isEstimating: false,
   quote: null,
-  kycSession: null,
   paymentInfo: null,
   transaction: null,
   transactionStatus: null,
+  pendingTxHash: null,
+  isWaitingForIban: false,
   isLoading: false,
   error: null,
 }
@@ -88,6 +98,10 @@ function reducer(state: SwapFlowState, action: SwapFlowAction): SwapFlowState {
       return { ...state, selectedToken: action.token, error: null }
     case 'SET_ADDRESS':
       return { ...state, recipientAddress: action.address, error: null }
+    case 'SET_SIGNER_ADDRESS':
+      return { ...state, signerAddress: action.address, error: null }
+    case 'SET_FLOW_ID':
+      return { ...state, flowId: action.flowId }
     case 'ESTIMATING':
       return { ...state, isEstimating: true }
     case 'SET_ESTIMATE':
@@ -98,17 +112,18 @@ function reducer(state: SwapFlowState, action: SwapFlowAction): SwapFlowState {
       return { ...state, error: action.error, isLoading: false }
     case 'SET_QUOTE':
       return { ...state, quote: action.quote, step: 'quote', isLoading: false }
-    case 'SET_KYC_SESSION':
-      return { ...state, kycSession: action.session }
     case 'SET_PAYMENT_INFO':
       return {
         ...state,
         paymentInfo: action.info,
         step: 'payment',
         isLoading: false,
+        isWaitingForIban: false,
       }
     case 'SET_TRANSACTION_STATUS':
       return { ...state, transactionStatus: action.status }
+    case 'SET_PENDING_TX_HASH':
+      return { ...state, pendingTxHash: action.hash }
     case 'SET_TRANSACTION':
       return {
         ...state,
@@ -116,8 +131,10 @@ function reducer(state: SwapFlowState, action: SwapFlowAction): SwapFlowState {
         step: 'complete',
         isLoading: false,
       }
+    case 'WAITING_FOR_IBAN':
+      return { ...state, step: 'payment', isWaitingForIban: true, isLoading: false, error: null }
     case 'GO_TO_STEP':
-      return { ...state, step: action.step, error: null, isLoading: false }
+      return { ...state, step: action.step, error: null, isLoading: false, isWaitingForIban: false }
     case 'RESET':
       return initialState
     default:
@@ -132,6 +149,12 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
   })
 
   const prevStepRef = useRef(state.step)
+  const pollAbortRef = useRef<AbortController | null>(null)
+  const walletClientRef = useRef<WalletClient<Transport, Chain | undefined, Account> | null>(null)
+
+  const setSigner = useCallback((wc: WalletClient<Transport, Chain | undefined, Account> | null) => {
+    walletClientRef.current = wc
+  }, [])
 
   useEffect(() => {
     if (state.step !== prevStepRef.current) {
@@ -204,9 +227,15 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
         dispatch({ type: 'SET_FIAT_AMOUNT', amount: saved.fiatAmount })
         dispatch({ type: 'SET_FIAT_CURRENCY', currency: saved.fiatCurrency })
         dispatch({ type: 'SET_ADDRESS', address: saved.recipientAddress })
+        if (saved.signerAddress) {
+          dispatch({ type: 'SET_SIGNER_ADDRESS', address: saved.signerAddress })
+        }
+        if (saved.flowId) {
+          dispatch({ type: 'SET_FLOW_ID', flowId: saved.flowId })
+        }
       }
 
-      const targetWallet = saved?.recipientAddress || wallet
+      const targetWallet = saved?.signerAddress || saved?.recipientAddress || wallet
 
       dispatch({ type: 'SET_LOADING', loading: true })
 
@@ -230,10 +259,7 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
             dispatch({ type: 'SET_ADDRESS', address: targetWallet })
             dispatch({ type: 'SET_PAYMENT_INFO', info })
           } else {
-            dispatch({
-              type: 'SET_ERROR',
-              error: 'Monerium account connected but IBAN is not ready yet. Please try again.',
-            })
+            dispatch({ type: 'WAITING_FOR_IBAN' })
           }
         })
         .catch((err) => {
@@ -248,6 +274,51 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Poll for IBAN when waiting for Monerium provisioning
+  useEffect(() => {
+    if (!state.isWaitingForIban) return
+
+    const moneriumWallet = state.signerAddress || state.recipientAddress
+    if (!moneriumWallet) return
+
+    let cancelled = false
+    const IBAN_POLL_MS = 3_000
+
+    logger.logInfo('monerium', 'iban_polling_started', { walletAddress: moneriumWallet })
+
+    ;(async () => {
+      while (!cancelled) {
+        await new Promise(r => setTimeout(r, IBAN_POLL_MS))
+        if (cancelled) return
+        try {
+          const result = await fetchIban(moneriumWallet)
+          if (cancelled) return
+          if (result.ready && result.iban && result.bic) {
+            logger.logInfo('monerium', 'iban_polling_resolved', {
+              walletAddress: moneriumWallet,
+              iban: result.iban,
+            })
+            const info = buildPaymentInfo({
+              iban: result.iban,
+              bic: result.bic,
+              beneficiary: result.beneficiary,
+              amount: state.fiatAmount,
+              currency: state.fiatCurrency,
+              quoteId: state.quote?.id || 'restored',
+            })
+            dispatch({ type: 'SET_PAYMENT_INFO', info })
+            return
+          }
+        } catch {
+          // non-fatal: retry on next tick
+        }
+      }
+    })()
+
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.isWaitingForIban])
 
   const setFiatCurrency = useCallback((currency: FiatCurrency) => {
     dispatch({ type: 'SET_FIAT_CURRENCY', currency })
@@ -270,9 +341,17 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
     dispatch({ type: 'SET_ADDRESS', address })
   }, [])
 
+  const setSignerAddress = useCallback((address: string) => {
+    dispatch({ type: 'SET_SIGNER_ADDRESS', address })
+  }, [])
+
+  const setFlowId = useCallback((flowId: string) => {
+    dispatch({ type: 'SET_FLOW_ID', flowId })
+  }, [])
+
   const requestQuote = useCallback(async () => {
     if (!state.fiatAmount || !state.recipientAddress) {
-      dispatch({ type: 'SET_ERROR', error: 'Please fill in all fields' })
+      dispatch({ type: 'SET_ERROR', error: 'Please enter an amount and wallet address' })
       return
     }
 
@@ -347,172 +426,87 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
     state.recipientAddress,
   ])
 
+  const MONERIUM_LINK_MESSAGE = 'I hereby declare that I am the address owner.'
+
   const startMoneriumAuth = useCallback(async () => {
+    const moneriumWallet = state.signerAddress || state.recipientAddress
     dispatch({ type: 'SET_ERROR', error: null })
     dispatch({ type: 'SET_LOADING', loading: true })
 
     logger.logInfo('monerium', 'auth_initiated', {
-      walletAddress: state.recipientAddress,
+      walletAddress: moneriumWallet,
     })
 
     try {
-      const result = await initiateMoneriumAuth(state.recipientAddress)
-
-      if (!result.authUrl) {
-        const ibanResult = await fetchIban(state.recipientAddress)
-        if (ibanResult.ready && ibanResult.iban && ibanResult.bic) {
-          logger.logInfo('monerium', 'already_onboarded', {
-            walletAddress: state.recipientAddress,
-            hasIban: true,
+      let signature: string | undefined
+      const wc = walletClientRef.current
+      if (wc && state.signerAddress && state.signerAddress !== state.recipientAddress) {
+        try {
+          signature = await wc.signMessage({ message: MONERIUM_LINK_MESSAGE })
+          logger.logInfo('monerium', 'auto_link_signature_created', { walletAddress: moneriumWallet })
+        } catch (err) {
+          logger.logWarn('monerium', 'auto_link_signature_failed', {
+            walletAddress: moneriumWallet,
+            error: err instanceof Error ? err.message : String(err),
           })
-          const info = buildPaymentInfo({
-            iban: ibanResult.iban,
-            bic: ibanResult.bic,
-            beneficiary: ibanResult.beneficiary,
-            amount: state.fiatAmount,
-            currency: state.fiatCurrency,
-            quoteId: state.quote?.id || 'direct',
-          })
-          dispatch({ type: 'SET_PAYMENT_INFO', info })
-          return
         }
       }
 
-      if (result.authUrl) {
-        logger.logInfo('monerium', 'redirecting_to_auth', {
-          walletAddress: state.recipientAddress,
-          fiatAmount: state.fiatAmount,
-          fiatCurrency: state.fiatCurrency,
-        })
+      const result = await initiateMoneriumAuth(moneriumWallet, { signature })
 
-        saveFlowStateForRedirect({
-          fiatAmount: state.fiatAmount,
-          fiatCurrency: state.fiatCurrency,
-          quoteId: state.quote?.id || '',
-          recipientAddress: state.recipientAddress,
-          tokenSymbol: state.selectedToken.symbol,
-          savedAt: Date.now(),
+      if (!result.authUrl) {
+        dispatch({
+          type: 'SET_ERROR',
+          error: 'Unable to start Monerium authorization. Please try again.',
         })
-
-        window.location.href = result.authUrl
+        return
       }
+
+      logger.logInfo('monerium', 'redirecting_to_auth', {
+        walletAddress: moneriumWallet,
+        fiatAmount: state.fiatAmount,
+        fiatCurrency: state.fiatCurrency,
+      })
+
+      saveFlowStateForRedirect({
+        fiatAmount: state.fiatAmount,
+        fiatCurrency: state.fiatCurrency,
+        quoteId: state.quote?.id || '',
+        recipientAddress: state.recipientAddress,
+        signerAddress: state.signerAddress || undefined,
+        tokenSymbol: state.selectedToken.symbol,
+        flowId: state.flowId || undefined,
+        savedAt: Date.now(),
+      })
+
+      window.location.href = result.authUrl
     } catch (err) {
       logger.logError('monerium', 'auth_failed', err, {
-        walletAddress: state.recipientAddress,
+        walletAddress: moneriumWallet,
       })
       dispatch({
         type: 'SET_ERROR',
         error: err instanceof Error ? err.message : 'Failed to connect to Monerium',
       })
     }
-  }, [state.recipientAddress, state.fiatAmount, state.fiatCurrency, state.quote, state.selectedToken])
+  }, [state.recipientAddress, state.signerAddress, state.fiatAmount, state.fiatCurrency, state.quote, state.selectedToken])
 
   const proceedFromQuote = useCallback(async () => {
+    const moneriumWallet = state.signerAddress || state.recipientAddress
+
     logger.logInfo('flow', 'proceeding_from_quote', {
       quoteId: state.quote?.id,
-      walletAddress: state.recipientAddress,
+      walletAddress: moneriumWallet,
+      recipientAddress: state.recipientAddress,
     })
 
     dispatch({ type: 'SET_LOADING', loading: true })
 
     try {
-      const kycStatus = await getKycStatus(state.recipientAddress)
+      const ibanResult = await fetchIban(moneriumWallet)
 
-      logger.logInfo('kyc', 'status_checked', {
-        status: kycStatus,
-        walletAddress: state.recipientAddress,
-      })
-
-      if (kycStatus === 'approved') {
-        const ibanResult = await fetchIban(state.recipientAddress)
-
-        logger.logInfo('monerium', 'iban_checked_after_kyc', {
-          walletAddress: state.recipientAddress,
-          ready: ibanResult.ready,
-          hasIban: !!ibanResult.iban,
-          needsAuth: ibanResult.needsAuth,
-        })
-
-        if (ibanResult.ready && ibanResult.iban && ibanResult.bic) {
-          const info = buildPaymentInfo({
-            iban: ibanResult.iban,
-            bic: ibanResult.bic,
-            beneficiary: ibanResult.beneficiary,
-            amount: state.fiatAmount,
-            currency: state.fiatCurrency,
-            quoteId: state.quote!.id,
-          })
-          dispatch({ type: 'SET_PAYMENT_INFO', info })
-        } else if (ibanResult.needsAuth) {
-          logger.logInfo('monerium', 'needs_auth_redirect', {
-            walletAddress: state.recipientAddress,
-          })
-          await startMoneriumAuth()
-        } else {
-          dispatch({
-            type: 'SET_ERROR',
-            error: 'IBAN is not ready yet. Please try again in a moment.',
-          })
-        }
-      } else {
-        logger.logInfo('kyc', 'kyc_required', {
-          currentStatus: kycStatus,
-          walletAddress: state.recipientAddress,
-        })
-        dispatch({ type: 'GO_TO_STEP', step: 'kyc' })
-      }
-    } catch (err) {
-      logger.logError('flow', 'proceed_from_quote_failed', err, {
-        walletAddress: state.recipientAddress,
-        quoteId: state.quote?.id,
-      })
-      dispatch({
-        type: 'SET_ERROR',
-        error: err instanceof Error ? err.message : 'Something went wrong',
-      })
-    }
-  }, [state.recipientAddress, state.fiatAmount, state.fiatCurrency, state.quote, startMoneriumAuth])
-
-  const completeKyc = useCallback(async () => {
-    logger.logInfo('kyc', 'kyc_completion_attempted', {
-      walletAddress: state.recipientAddress,
-    })
-
-    dispatch({ type: 'SET_LOADING', loading: true })
-
-    try {
-      const status = await getKycStatus(state.recipientAddress)
-
-      logger.logInfo('kyc', 'kyc_status_after_completion', {
-        status,
-        walletAddress: state.recipientAddress,
-      })
-
-      if (status !== 'approved') {
-        logger.logWarn('kyc', 'kyc_not_yet_approved', {
-          status,
-          walletAddress: state.recipientAddress,
-        })
-        dispatch({
-          type: 'SET_ERROR',
-          error: 'Verification is still processing. Please wait a moment and try again.',
-        })
-        return
-      }
-
-      dispatch({
-        type: 'SET_KYC_SESSION',
-        session: {
-          applicantId: '',
-          status: 'approved',
-          provider: 'sumsub',
-        },
-      })
-
-      const ibanResult = await fetchIban(state.recipientAddress)
-
-      logger.logInfo('monerium', 'iban_checked_after_kyc_complete', {
-        walletAddress: state.recipientAddress,
+      logger.logInfo('monerium', 'iban_checked', {
+        walletAddress: moneriumWallet,
         ready: ibanResult.ready,
         hasIban: !!ibanResult.iban,
         needsAuth: ibanResult.needsAuth,
@@ -525,73 +519,180 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
           beneficiary: ibanResult.beneficiary,
           amount: state.fiatAmount,
           currency: state.fiatCurrency,
-          quoteId: state.quote?.id || 'kyc-complete',
+          quoteId: state.quote!.id,
         })
         dispatch({ type: 'SET_PAYMENT_INFO', info })
-      } else {
-        logger.logInfo('monerium', 'redirecting_to_monerium_after_kyc', {
-          walletAddress: state.recipientAddress,
+      } else if (ibanResult.needsAuth) {
+        logger.logInfo('monerium', 'needs_auth_redirect', {
+          walletAddress: moneriumWallet,
         })
         await startMoneriumAuth()
+      } else {
+        dispatch({ type: 'WAITING_FOR_IBAN' })
       }
     } catch (err) {
-      logger.logError('kyc', 'kyc_completion_failed', err, {
-        walletAddress: state.recipientAddress,
+      logger.logError('flow', 'proceed_from_quote_failed', err, {
+        walletAddress: moneriumWallet,
+        quoteId: state.quote?.id,
       })
       dispatch({
         type: 'SET_ERROR',
-        error: err instanceof Error ? err.message : 'KYC verification failed',
+        error: err instanceof Error ? err.message : 'Something went wrong',
       })
     }
-  }, [state.recipientAddress, state.fiatAmount, state.fiatCurrency, state.quote, startMoneriumAuth])
+  }, [state.recipientAddress, state.signerAddress, state.fiatAmount, state.fiatCurrency, state.quote, startMoneriumAuth])
 
-  const confirmPayment = useCallback(async () => {
-    logger.logInfo('payment', 'payment_confirmed', {
-      quoteId: state.quote?.id,
-      token: state.selectedToken.symbol,
-      tokenAmount: state.quote?.tokenAmount,
-      walletAddress: state.recipientAddress,
-    })
+  const executeSwapRef = useRef<((depositedAmount: bigint) => Promise<void>) | undefined>(undefined)
 
-    dispatch({ type: 'GO_TO_STEP', step: 'processing' })
-    dispatch({ type: 'SET_TRANSACTION_STATUS', status: 'awaiting_payment' })
+  const executeSwapAfterDeposit = useCallback(async (depositedAmount: bigint) => {
+    const wc = walletClientRef.current
+    if (!wc) {
+      logger.logError('swap', 'no_signer_available', new Error('Wallet not connected for swap'))
+      dispatch({
+        type: 'SET_ERROR',
+        error: 'Wallet disconnected. Please reconnect to complete the swap.',
+      })
+      return
+    }
+
+    dispatch({ type: 'SET_TRANSACTION_STATUS', status: 'converting' })
 
     try {
-      const transaction = await simulatePaymentFlow({
-        quoteId: state.quote?.id || 'direct',
-        token: state.selectedToken,
-        tokenAmount: state.quote?.tokenAmount || '0',
-        onStatusChange: (status) => {
-          logger.logInfo('payment', 'transaction_status_changed', {
-            status,
-            quoteId: state.quote?.id,
-            walletAddress: state.recipientAddress,
-          })
-          dispatch({ type: 'SET_TRANSACTION_STATUS', status })
+      const eurAmount = state.fiatCurrency === 'GBP'
+        ? parseFloat(state.fiatAmount) * GBP_TO_EUR
+        : parseFloat(state.fiatAmount)
+
+      const nexusAddress = await getNexusAddress(wc)
+
+      logger.logInfo('swap', 're_quoting_bungee', {
+        walletAddress: state.recipientAddress,
+        nexusAddress,
+        eurAmount,
+        token: state.selectedToken.symbol,
+      })
+
+      const freshQuote = await getManualRouteQuote({
+        eurAmount: eurAmount - BRIDGE_FEE_RESERVE_EUR,
+        destinationChainId: state.selectedToken.chainId,
+        outputToken: state.selectedToken.address,
+        receiverAddress: state.recipientAddress,
+        userAddress: nexusAddress,
+      })
+
+      logger.logInfo('swap', 'building_bungee_tx', { quoteId: freshQuote.quoteId })
+
+      const bungeeTx = await buildBungeeTx(freshQuote.quoteId)
+
+      logger.logInfo('swap', 'executing_fusion_swap', {
+        walletAddress: state.recipientAddress,
+        txTo: bungeeTx.txData.to,
+        chainId: bungeeTx.txData.chainId,
+        hasApproval: !!bungeeTx.approvalData,
+      })
+
+      const result = await executeFusionSwap({
+        walletClient: wc,
+        eureAmount: depositedAmount,
+        bungeeTx,
+        recipientAddress: state.recipientAddress as `0x${string}`,
+        onStatusChange: (status, hash) => {
+          logger.logInfo('swap', 'fusion_status', { status, hash })
+          if (status === 'executing') {
+            dispatch({ type: 'SET_TRANSACTION_STATUS', status: 'sending' })
+          }
+          if (hash) {
+            dispatch({ type: 'SET_PENDING_TX_HASH', hash })
+          }
         },
       })
 
-      logger.logInfo('payment', 'transaction_complete', {
-        transactionId: transaction.id,
-        txHash: transaction.txHash,
-        tokenAmount: transaction.tokenAmount,
-        token: transaction.token.symbol,
-        walletAddress: state.recipientAddress,
-      })
+      logger.logInfo('swap', 'fusion_swap_complete', { hash: result.hash })
 
-      dispatch({ type: 'SET_TRANSACTION', transaction })
+      dispatch({
+        type: 'SET_TRANSACTION',
+        transaction: {
+          id: `tx_${Date.now()}`,
+          status: 'complete',
+          txHash: result.hash,
+          tokenAmount: state.quote?.tokenAmount ?? '0',
+          token: state.selectedToken,
+          createdAt: Date.now(),
+        },
+      })
     } catch (err) {
-      logger.logError('payment', 'transaction_failed', err, {
-        quoteId: state.quote?.id,
+      logger.logError('swap', 'fusion_swap_failed', err, {
         walletAddress: state.recipientAddress,
       })
       dispatch({
         type: 'SET_ERROR',
-        error:
-          err instanceof Error ? err.message : 'Transaction failed',
+        error: err instanceof Error ? err.message : 'Swap failed. Your EURe is safe in your wallet.',
       })
     }
-  }, [state.quote, state.selectedToken, state.recipientAddress])
+  }, [state.fiatAmount, state.fiatCurrency, state.selectedToken, state.recipientAddress, state.quote])
+
+  executeSwapRef.current = executeSwapAfterDeposit
+
+  // Auto-start watching for EURe deposit when entering the payment step
+  useEffect(() => {
+    if (state.step !== 'payment' || !state.paymentInfo) return
+
+    const depositWallet = state.signerAddress || state.recipientAddress
+    if (!depositWallet) return
+
+    const abortController = new AbortController()
+    pollAbortRef.current?.abort()
+    pollAbortRef.current = abortController
+
+    logger.logInfo('payment', 'auto_watch_started', {
+      quoteId: state.quote?.id,
+      walletAddress: depositWallet,
+    })
+
+    dispatch({ type: 'SET_TRANSACTION_STATUS', status: 'awaiting_payment' })
+
+    ;(async () => {
+      try {
+        const { depositedWei, transaction } = await watchForEureDeposit({
+          walletAddress: depositWallet,
+          onStatusChange: (status) => {
+            logger.logInfo('payment', 'transaction_status_changed', {
+              status,
+              walletAddress: depositWallet,
+            })
+            dispatch({ type: 'SET_TRANSACTION_STATUS', status })
+          },
+          signal: abortController.signal,
+        })
+
+        logger.logInfo('payment', 'eure_deposit_detected', {
+          transactionId: transaction.id,
+          eureAmount: transaction.tokenAmount,
+          depositedWei: depositedWei.toString(),
+          walletAddress: depositWallet,
+        })
+
+        dispatch({ type: 'GO_TO_STEP', step: 'processing' })
+        dispatch({ type: 'SET_TRANSACTION_STATUS', status: 'payment_received' })
+
+        await executeSwapRef.current?.(depositedWei)
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        logger.logError('payment', 'deposit_watch_failed', err, {
+          walletAddress: depositWallet,
+        })
+        dispatch({
+          type: 'SET_ERROR',
+          error:
+            err instanceof Error ? err.message : 'Failed to detect deposit',
+        })
+      }
+    })()
+
+    return () => {
+      abortController.abort()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.step, state.paymentInfo])
 
   const ESTIMATE_DEBOUNCE_MS = 600
 
@@ -634,7 +735,14 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
     }
   }, [state.fiatAmount, state.fiatCurrency, state.selectedToken])
 
+  useEffect(() => {
+    return () => {
+      pollAbortRef.current?.abort()
+    }
+  }, [])
+
   const reset = useCallback(() => {
+    pollAbortRef.current?.abort()
     logger.logInfo('flow', 'flow_reset', {
       previousStep: state.step,
       walletAddress: state.recipientAddress || undefined,
@@ -647,7 +755,6 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
     const stepOrder: FlowStep[] = [
       'input',
       'quote',
-      'kyc',
       'payment',
       'processing',
       'complete',
@@ -669,10 +776,11 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
     setFiatAmount,
     setToken,
     setAddress,
+    setSignerAddress,
+    setFlowId,
+    setSigner,
     requestQuote,
     proceedFromQuote,
-    completeKyc,
-    confirmPayment,
     reset,
     goBack,
   }

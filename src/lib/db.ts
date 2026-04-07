@@ -78,6 +78,23 @@ export async function ensureMigrations() {
     CREATE INDEX IF NOT EXISTS idx_flow_logs_wallet ON flow_logs (wallet_address);
     CREATE INDEX IF NOT EXISTS idx_flow_logs_category ON flow_logs (category);
     CREATE INDEX IF NOT EXISTS idx_flow_logs_created ON flow_logs (created_at);
+
+    CREATE TABLE IF NOT EXISTS escrow_keys (
+      flow_id TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      recipient_address TEXT NOT NULL,
+      encrypted_key TEXT NOT NULL,
+      iv TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS escrow_otps (
+      email TEXT PRIMARY KEY,
+      otp TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_escrow_keys_email ON escrow_keys (email);
   `)
 
   migrated = true

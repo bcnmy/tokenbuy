@@ -3,7 +3,7 @@ import crypto from 'crypto'
 const CREDENTIALS_CLIENT_ID = process.env.MONERIUM_CLIENT_ID!
 const CLIENT_SECRET = process.env.MONERIUM_CLIENT_SECRET!
 const OAUTH_CLIENT_ID = process.env.MONERIUM_OAUTH_CLIENT_ID!
-const BASE_URL = process.env.MONERIUM_API_URL || 'https://api.monerium.dev'
+const BASE_URL = process.env.MONERIUM_API_URL || 'https://api.monerium.app'
 const REDIRECT_URI = process.env.MONERIUM_REDIRECT_URI || 'http://localhost:3000/api/monerium/callback'
 
 const IS_SANDBOX = BASE_URL.includes('monerium.dev')
@@ -31,6 +31,7 @@ export function buildAuthUrl(params: {
   codeChallenge: string
   state: string
   walletAddress?: string
+  signature?: string
   email?: string
   chain?: string
 }): string {
@@ -41,6 +42,7 @@ export function buildAuthUrl(params: {
   url.searchParams.set('redirect_uri', REDIRECT_URI)
   url.searchParams.set('state', params.state)
   if (params.walletAddress) url.searchParams.set('address', params.walletAddress)
+  if (params.signature) url.searchParams.set('signature', params.signature)
   if (params.email) url.searchParams.set('email', params.email)
   if (params.chain) url.searchParams.set('chain', params.chain)
   return url.toString()

@@ -1,5 +1,5 @@
 type LogLevel = 'debug' | 'info' | 'warn' | 'error'
-type LogCategory = 'flow' | 'quote' | 'kyc' | 'monerium' | 'payment' | 'bungee' | 'client'
+type LogCategory = 'flow' | 'quote' | 'kyc' | 'monerium' | 'payment' | 'bungee' | 'client' | 'swap'
 
 type ClientLogEntry = {
   level: LogLevel

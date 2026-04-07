@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Sora, IBM_Plex_Mono, Inter, DM_Sans } from 'next/font/google'
 import { SystemThemeSync } from '@/components/SystemThemeSync'
+import { Web3Provider } from '@/components/Web3Provider'
 import './globals.css'
 
 const themeScript = `(function(){try{if(window.matchMedia('(prefers-color-scheme:dark)').matches)document.documentElement.classList.add('dark')}catch(e){}})()`
@@ -30,9 +31,23 @@ const dmSans = DM_Sans({
 })
 
 export const metadata: Metadata = {
-  title: 'TokenBuy — Buy Crypto with 0% Onramp Fee',
+  metadataBase: new URL(process.env.NEXT_PUBLIC_BASE_URL || 'https://tokenbuy.app'),
+  title: 'TokenBuy — The cheapest way to buy crypto in the EU',
   description:
-    'The cheapest way to buy crypto tokens in the EU. Send EUR via bank transfer, receive tokens in your wallet. Powered by Monerium.',
+    'The cheapest way to buy crypto tokens in the EU. Send EUR via bank transfer, receive tokens in your wallet. Near-zero fees powered by Monerium.',
+  openGraph: {
+    title: 'TokenBuy — The cheapest way to buy crypto in the EU',
+    description:
+      'Send EUR via bank transfer, receive tokens in your wallet. ~0% onramp fee for EU users.',
+    type: 'website',
+    siteName: 'TokenBuy',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'TokenBuy — The cheapest way to buy crypto in the EU',
+    description:
+      'Send EUR via bank transfer, receive tokens in your wallet. ~0% onramp fee for EU users.',
+  },
 }
 
 export default function RootLayout({
@@ -54,7 +69,9 @@ export default function RootLayout({
         style={{ fontFamily: 'var(--font-sora), system-ui, sans-serif' }}
       >
         <SystemThemeSync />
-        {children}
+        <Web3Provider>
+          {children}
+        </Web3Provider>
       </body>
     </html>
   )

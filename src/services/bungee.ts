@@ -4,7 +4,7 @@ const BUNGEE_API = 'https://public-backend.bungee.exchange'
 
 export const EURE_GNOSIS = {
   chainId: 100,
-  address: '0xcB444e90D8198415266c6a2724b7900fb12FC56E',
+  address: '0x420CA0f9B9b604cE0fd9C18EF134C705e5Fa3430',
   symbol: 'EURe',
   name: 'Monerium EUR emoney',
   decimals: 18,
@@ -309,6 +309,88 @@ export async function getBungeeQuote(params: {
     routeName: route.routeDetails.name,
     quoteExpiry: route.quoteExpiry,
   }
+}
+
+// --- Manual Route Quote (for build-tx) ---
+
+export async function getManualRouteQuote(params: {
+  eurAmount: number
+  destinationChainId: number
+  outputToken: string
+  receiverAddress: string
+  userAddress?: string
+  slippage?: string
+}, signal?: AbortSignal): Promise<BungeeQuoteResult> {
+  const inputAmount = eureToWei(params.eurAmount)
+  if (inputAmount === '0') throw new Error('Amount too small')
+
+  const raw = await bungeeGet<BungeeQuoteRaw>(
+    '/api/v1/bungee/quote',
+    {
+      originChainId: EURE_GNOSIS.chainId.toString(),
+      destinationChainId: params.destinationChainId.toString(),
+      inputToken: EURE_GNOSIS.address,
+      outputToken: params.outputToken,
+      inputAmount,
+      receiverAddress: params.receiverAddress,
+      userAddress: params.userAddress ?? params.receiverAddress,
+      slippage: params.slippage ?? '0.5',
+      enableManual: 'true',
+    },
+    signal,
+  )
+
+  const route = raw.manualRoutes[0]
+  if (!route) {
+    throw new Error('No manual route found for this swap. Try a different token or amount.')
+  }
+
+  return {
+    quoteId: route.quoteId,
+    outputAmount: route.output.amount,
+    minOutputAmount: route.output.minAmountOut,
+    outputToken: {
+      symbol: route.output.token.symbol,
+      name: route.output.token.name,
+      decimals: route.output.token.decimals,
+      chainId: route.output.token.chainId,
+      address: route.output.token.address,
+      icon: route.output.token.logoURI,
+    },
+    inputValueUsd: raw.input.valueInUsd,
+    outputValueUsd: route.output.effectiveReceivedInUsd,
+    gasFeeUsd: route.gasFee?.feeInUsd ?? 0,
+    routeFeeUsd: route.routeDetails.routeFee?.feeInUsd ?? 0,
+    estimatedTime: route.estimatedTime,
+    routeName: route.routeDetails.name,
+    quoteExpiry: route.quoteExpiry,
+  }
+}
+
+// --- Build Transaction ---
+
+export type BungeeBuildTxResult = {
+  txData: {
+    data: string
+    to: string
+    chainId: number
+    value: string
+  }
+  approvalData: {
+    spenderAddress: string
+    amount: string
+    tokenAddress: string
+    userAddress: string
+  } | null
+  userOp: string
+}
+
+export async function buildBungeeTx(quoteId: string, signal?: AbortSignal): Promise<BungeeBuildTxResult> {
+  return bungeeGet<BungeeBuildTxResult>(
+    '/api/v1/bungee/build-tx',
+    { quoteId },
+    signal,
+  )
 }
 
 // --- Chain name lookup ---

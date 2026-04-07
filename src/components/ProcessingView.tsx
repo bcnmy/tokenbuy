@@ -1,11 +1,13 @@
 'use client'
 
 import { motion } from 'motion/react'
-import { Check, Clock, Landmark, ArrowRightLeft, Send } from 'lucide-react'
+import { Check, Clock, Landmark, ArrowRightLeft, Send, AlertCircle, ExternalLink } from 'lucide-react'
 import type { TransactionStatus } from '@/types'
 
 type ProcessingViewProps = {
   status: TransactionStatus | null
+  pendingTxHash?: string | null
+  error?: string | null
 }
 
 const STEP_ICONS: Record<string, React.ComponentType<{ className?: string; strokeWidth?: number }>> = {
@@ -20,38 +22,45 @@ const STATUS_CONFIG: Record<
   { label: string; description: string; progress: number }
 > = {
   awaiting_payment: {
-    label: 'Awaiting Payment',
-    description: 'Monitoring your IBAN for the incoming transfer...',
+    label: 'Waiting for EURe',
+    description: 'Watching for your EURe deposit on Gnosis Chain. This can take a few minutes after your bank transfer is sent.',
     progress: 10,
   },
   payment_received: {
-    label: 'Payment Received',
-    description: 'Your EUR has arrived. Minting EURe on-chain...',
+    label: 'EURe Received',
+    description: 'EURe has arrived! Preparing the swap...',
     progress: 35,
   },
   converting: {
     label: 'Swapping Tokens',
-    description: 'Converting EURe to your selected token via DEX...',
-    progress: 65,
+    description: 'Please approve the transaction in your wallet. Biconomy is routing your swap...',
+    progress: 55,
   },
   sending: {
-    label: 'Sending to Wallet',
-    description: 'Transferring tokens to your wallet address...',
-    progress: 90,
+    label: 'Executing Swap',
+    description: 'Transaction submitted. Waiting for confirmation on-chain...',
+    progress: 80,
   },
   complete: {
     label: 'Complete',
-    description: 'Tokens have been delivered to your wallet.',
+    description: 'Tokens have been delivered to your wallet!',
     progress: 100,
   },
   failed: {
     label: 'Failed',
-    description: 'Something went wrong. Please contact support.',
+    description: 'Something went wrong. Your EURe is safe in your wallet.',
     progress: 0,
   },
 }
 
-export function ProcessingView({ status }: ProcessingViewProps) {
+const VISIBLE_STEPS: TransactionStatus[] = [
+  'awaiting_payment',
+  'payment_received',
+  'converting',
+  'sending',
+]
+
+export function ProcessingView({ status, pendingTxHash, error }: ProcessingViewProps) {
   const config = status ? STATUS_CONFIG[status] : STATUS_CONFIG.awaiting_payment
 
   return (
@@ -110,6 +119,20 @@ export function ProcessingView({ status }: ProcessingViewProps) {
         >
           {config.description}
         </motion.p>
+        {pendingTxHash && status === 'sending' && (
+          <motion.a
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            href={`https://meescan.biconomy.io/details/${pendingTxHash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--accent)] hover:underline mt-1"
+          >
+            View on MEEScan
+            <ExternalLink className="w-3 h-3" />
+          </motion.a>
+        )}
       </div>
 
       <div className="space-y-2.5">
@@ -124,15 +147,14 @@ export function ProcessingView({ status }: ProcessingViewProps) {
         </div>
 
         <div className="space-y-0.5">
-          {Object.entries(STATUS_CONFIG)
-            .filter(([key]) => key !== 'complete' && key !== 'failed')
-            .map(([key, val]) => {
+          {VISIBLE_STEPS.map((key) => {
+              const val = STATUS_CONFIG[key]
+              const keyIdx = VISIBLE_STEPS.indexOf(key)
+              const statusIdx = status ? VISIBLE_STEPS.indexOf(status) : -1
               const stepStatus = status
-                ? Object.keys(STATUS_CONFIG).indexOf(key) <=
-                  Object.keys(STATUS_CONFIG).indexOf(status)
+                ? keyIdx < statusIdx
                   ? 'done'
-                  : Object.keys(STATUS_CONFIG).indexOf(key) ===
-                      Object.keys(STATUS_CONFIG).indexOf(status) + 1
+                  : keyIdx === statusIdx
                     ? 'active'
                     : 'pending'
                 : key === 'awaiting_payment'
@@ -177,6 +199,17 @@ export function ProcessingView({ status }: ProcessingViewProps) {
             })}
         </div>
       </div>
+
+      {error && (
+        <motion.div
+          initial={{ opacity: 0, y: -5 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-[12px] text-[var(--error)] font-medium bg-[var(--error-wash)] rounded-xl px-3 py-2.5 flex items-start gap-2"
+        >
+          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </motion.div>
+      )}
     </motion.div>
   )
 }

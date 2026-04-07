@@ -101,10 +101,18 @@ export function CompleteView({ transaction, onNewSwap }: CompleteViewProps) {
 }
 
 function getExplorerUrl(chainId: number, txHash: string): string {
-  const explorers: Record<number, string> = {
-    1: 'https://etherscan.io/tx/',
-    100: 'https://gnosisscan.io/tx/',
-    137: 'https://polygonscan.com/tx/',
+  if (txHash.startsWith('0x') && txHash.length === 66) {
+    const explorers: Record<number, string> = {
+      1: 'https://etherscan.io/tx/',
+      10: 'https://optimistic.etherscan.io/tx/',
+      100: 'https://gnosisscan.io/tx/',
+      137: 'https://polygonscan.com/tx/',
+      8453: 'https://basescan.org/tx/',
+      42161: 'https://arbiscan.io/tx/',
+      43114: 'https://snowtrace.io/tx/',
+      56: 'https://bscscan.com/tx/',
+    }
+    return `${explorers[chainId] ?? 'https://etherscan.io/tx/'}${txHash}`
   }
-  return `${explorers[chainId] ?? 'https://etherscan.io/tx/'}${txHash}`
+  return `https://meescan.biconomy.io/details/${txHash}`
 }

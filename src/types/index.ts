@@ -97,7 +97,8 @@ export type QuoteEstimate = {
 export type FlowStep =
   | 'input'
   | 'quote'
-  | 'kyc'
   | 'payment'
   | 'processing'
   | 'complete'
+
+export type InputMode = 'connect_wallet' | 'paste_address'

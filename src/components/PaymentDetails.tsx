@@ -3,13 +3,12 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'motion/react'
 import { QRCodeSVG } from 'qrcode.react'
-import { Copy, CheckCheck, AlertTriangle, Send, ArrowLeft, Landmark } from 'lucide-react'
+import { Copy, CheckCheck, ArrowLeft, Landmark, Clock, ShieldAlert } from 'lucide-react'
 import type { PaymentInfo } from '@/types'
 import { FIAT_SYMBOLS } from '@/constants/tokens'
 
 type PaymentDetailsProps = {
   payment: PaymentInfo
-  onConfirmSent: () => void
   onBack: () => void
 }
 
@@ -69,7 +68,7 @@ function buildEpcPayload(payment: PaymentInfo): string {
   ].join('\n')
 }
 
-export function PaymentDetails({ payment, onConfirmSent, onBack }: PaymentDetailsProps) {
+export function PaymentDetails({ payment, onBack }: PaymentDetailsProps) {
   const symbol = FIAT_SYMBOLS[payment.currency]
   const epcPayload = useMemo(() => buildEpcPayload(payment), [payment])
 
@@ -136,33 +135,79 @@ export function PaymentDetails({ payment, onConfirmSent, onBack }: PaymentDetail
         </div>
       </div>
 
-      <div className="bg-[var(--warning-wash)] border border-[var(--warning)]/20 rounded-xl p-2.5">
-        <p className="text-[11px] text-[var(--warning)] font-medium leading-relaxed inline-flex items-start gap-1.5" style={{ color: '#B8860B' }}>
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" strokeWidth={2} />
-          <span>
-            Use the exact reference code above. Payment is auto-detected within ~30s of arrival.
-          </span>
+      <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl bg-[var(--warning-wash,var(--accent-wash))] border border-[var(--warning,var(--accent))]/20">
+        <ShieldAlert className="w-3.5 h-3.5 text-[var(--warning,var(--accent))] shrink-0 mt-0.5" />
+        <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
+          <span className="font-semibold">Do not clear browser data</span> until your transaction completes. Your signing key is stored locally.
         </p>
       </div>
 
-      <div className="flex gap-3">
-        <button
-          type="button"
-          onClick={onBack}
-          className="btn-secondary flex-1 py-3 text-sm cursor-pointer inline-flex items-center justify-center gap-1.5"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          Back
-        </button>
-        <button
-          type="button"
-          onClick={onConfirmSent}
-          className="btn-primary flex-[2] py-3 text-sm cursor-pointer inline-flex items-center justify-center gap-1.5"
-        >
-          <Send className="w-3.5 h-3.5" />
-          I&apos;ve sent it
-        </button>
-      </div>
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+        className="relative"
+      >
+        <motion.div
+          className="absolute -inset-4 pointer-events-none"
+          style={{ background: 'radial-gradient(ellipse at 30% 50%, var(--accent-wash), transparent 55%)' }}
+          animate={{ opacity: [0.7, 0.2, 0.7] }}
+          transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+        />
+        <motion.div
+          className="absolute -inset-4 pointer-events-none"
+          style={{ background: 'radial-gradient(ellipse at 70% 50%, var(--accent-wash), transparent 55%)' }}
+          animate={{ opacity: [0.2, 0.7, 0.2] }}
+          transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+        />
+
+        <div className="relative flex items-center gap-3 px-4 py-3.5">
+          <div className="relative shrink-0">
+            <motion.div
+              className="absolute rounded-full pointer-events-none"
+              style={{
+                inset: '-12px',
+                background: 'radial-gradient(circle, var(--accent) 0%, transparent 70%)',
+              }}
+              animate={{ scale: [0.5, 1.2], opacity: [0.2, 0] }}
+              transition={{ duration: 2, repeat: Infinity, ease: 'easeOut' }}
+            />
+            <div className="w-9 h-9 rounded-full bg-[var(--accent)]/10 flex items-center justify-center">
+              <Clock className="w-4 h-4 text-[var(--accent)]" />
+            </div>
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[13px] font-semibold text-[var(--text-primary)]">
+                Waiting for payment
+              </span>
+              <span className="flex gap-[3px] mt-[1px]">
+                {[0, 1, 2].map((i) => (
+                  <motion.span
+                    key={i}
+                    className="block w-[4px] h-[4px] rounded-full bg-[var(--accent)]"
+                    animate={{ opacity: [0.15, 1, 0.15] }}
+                    transition={{ duration: 1.4, repeat: Infinity, delay: i * 0.2, ease: 'easeInOut' }}
+                  />
+                ))}
+              </span>
+            </div>
+            <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
+              Auto-detects within ~30s of arrival
+            </p>
+          </div>
+        </div>
+      </motion.div>
+
+      <button
+        type="button"
+        onClick={onBack}
+        className="btn-secondary w-full py-3 text-sm cursor-pointer inline-flex items-center justify-center gap-1.5"
+      >
+        <ArrowLeft className="w-3.5 h-3.5" />
+        Back
+      </button>
     </motion.div>
   )
 }

@@ -1,4 +1,7 @@
-import type { PaymentInfo, FiatCurrency, Transaction, Hex, Token } from '@/types'
+import { createPublicClient, http, type Address } from 'viem'
+import { gnosis } from 'viem/chains'
+import type { PaymentInfo, FiatCurrency, Transaction, Token } from '@/types'
+import { EURE_GNOSIS } from './bungee'
 
 type IbanResponse = {
   iban: string | null
@@ -25,7 +28,9 @@ export type SavedFlowState = {
   fiatCurrency: FiatCurrency
   quoteId: string
   recipientAddress: string
+  signerAddress?: string
   tokenSymbol: string
+  flowId?: string
   savedAt: number
 }
 
@@ -63,12 +68,16 @@ export function clearFlowState() {
  */
 export async function initiateMoneriumAuth(
   walletAddress: string,
-  email?: string,
+  options?: { email?: string; signature?: string },
 ): Promise<{ authUrl: string | null; iban?: string; bic?: string }> {
   const res = await fetch('/api/monerium/auth', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ walletAddress, email }),
+    body: JSON.stringify({
+      walletAddress,
+      email: options?.email,
+      signature: options?.signature,
+    }),
   })
 
   if (!res.ok) {
@@ -77,10 +86,6 @@ export async function initiateMoneriumAuth(
   }
 
   const data: AuthResponse = await res.json()
-
-  if (data.alreadyOnboarded && data.iban) {
-    return { authUrl: null, iban: data.iban, bic: data.bic }
-  }
 
   if (!data.authUrl) {
     throw new Error('No authorization URL received')
@@ -126,44 +131,148 @@ export function buildPaymentInfo(params: {
 }
 
 /**
- * Payment flow monitoring.
- *
- * In production this would listen to Monerium order webhooks
- * and onchain EURe Transfer events. For now we simulate the
- * progression after showing the real IBAN to the user.
+ * Logs the user out from Monerium by clearing the server-side profile
+ * and any local flow state.
  */
-export async function simulatePaymentFlow(params: {
-  quoteId: string
-  token: Token
-  tokenAmount: string
+export async function logoutMonerium(walletAddress: string): Promise<void> {
+  await fetch('/api/monerium/logout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ walletAddress }),
+  })
+  clearFlowState()
+}
+
+// --- On-chain EURe balance watching ---
+
+const EURE_MONERIUM_GNOSIS = '0x420CA0f9B9b604cE0fd9C18EF134C705e5Fa3430' as Address
+
+const gnosisClient = createPublicClient({
+  chain: gnosis,
+  transport: http(),
+})
+
+const erc20BalanceOfAbi = [
+  {
+    name: 'balanceOf',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+] as const
+
+async function getEureBalance(address: Address): Promise<bigint> {
+  return gnosisClient.readContract({
+    address: EURE_MONERIUM_GNOSIS,
+    abi: erc20BalanceOfAbi,
+    functionName: 'balanceOf',
+    args: [address],
+  })
+}
+
+function formatEureWei(wei: bigint): string {
+  const divisor = BigInt(10 ** EURE_GNOSIS.decimals)
+  const whole = wei / divisor
+  const remainder = wei % divisor
+  if (remainder === BigInt(0)) return whole.toString()
+  const decimals = remainder.toString().padStart(EURE_GNOSIS.decimals, '0')
+  const trimmed = decimals.slice(0, 2).replace(/0+$/, '')
+  return trimmed ? `${whole}.${trimmed}` : whole.toString()
+}
+
+const POLL_INTERVAL_MS = 5_000
+const MAX_POLL_DURATION_MS = 60 * 60 * 1000
+
+const EURE_TOKEN: Token = {
+  symbol: EURE_GNOSIS.symbol,
+  name: EURE_GNOSIS.name,
+  decimals: EURE_GNOSIS.decimals,
+  chainId: EURE_GNOSIS.chainId,
+  address: EURE_GNOSIS.address,
+  icon: null,
+}
+
+export type EureDepositResult = {
+  transaction: Transaction
+  depositedWei: bigint
+}
+
+/**
+ * Watches the EURe balance of `walletAddress` on Gnosis Chain.
+ * Resolves when the balance increases from its value at call time,
+ * indicating Monerium has processed the bank transfer and minted EURe.
+ */
+export async function watchForEureDeposit(params: {
+  walletAddress: string
   onStatusChange: (status: Transaction['status']) => void
-}): Promise<Transaction> {
+  signal?: AbortSignal
+}): Promise<EureDepositResult> {
+  const address = params.walletAddress as Address
   const txId = `tx_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
-  const steps: Array<{ status: Transaction['status']; delay: number }> = [
-    { status: 'payment_received', delay: 3000 },
-    { status: 'converting', delay: 4000 },
-    { status: 'sending', delay: 3000 },
-    { status: 'complete', delay: 2000 },
-  ]
+  const initialBalance = await getEureBalance(address)
 
-  let currentStatus: Transaction['status'] = 'awaiting_payment'
+  return new Promise<EureDepositResult>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const startTime = Date.now()
 
-  for (const step of steps) {
-    await new Promise((resolve) => setTimeout(resolve, step.delay))
-    currentStatus = step.status
-    params.onStatusChange(currentStatus)
-  }
+    function cleanup() {
+      if (timer !== null) clearTimeout(timer)
+    }
 
-  const mockTxHash: Hex =
-    `0x${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')}` as Hex
+    function onAbort() {
+      cleanup()
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
 
-  return {
-    id: txId,
-    status: 'complete',
-    txHash: mockTxHash,
-    tokenAmount: params.tokenAmount,
-    token: params.token,
-    createdAt: Date.now(),
-  }
+    if (params.signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'))
+      return
+    }
+
+    params.signal?.addEventListener('abort', onAbort, { once: true })
+
+    async function poll() {
+      if (params.signal?.aborted) return
+
+      if (Date.now() - startTime > MAX_POLL_DURATION_MS) {
+        cleanup()
+        params.signal?.removeEventListener('abort', onAbort)
+        reject(new Error('Timed out waiting for EURe deposit. The bank transfer may still be processing — please check back later.'))
+        return
+      }
+
+      try {
+        const currentBalance = await getEureBalance(address)
+
+        if (currentBalance > initialBalance) {
+          cleanup()
+          params.signal?.removeEventListener('abort', onAbort)
+
+          const deposited = currentBalance - initialBalance
+          params.onStatusChange('payment_received')
+
+          resolve({
+            depositedWei: deposited,
+            transaction: {
+              id: txId,
+              status: 'payment_received',
+              txHash: null,
+              tokenAmount: formatEureWei(deposited),
+              token: EURE_TOKEN,
+              createdAt: Date.now(),
+            },
+          })
+          return
+        }
+      } catch {
+        // Individual poll errors are non-fatal; retry on next tick
+      }
+
+      timer = setTimeout(poll, POLL_INTERVAL_MS)
+    }
+
+    timer = setTimeout(poll, POLL_INTERVAL_MS)
+  })
 }

@@ -8,7 +8,6 @@ import type { FlowStep } from '@/types'
 const STEPS: { key: FlowStep; label: string }[] = [
   { key: 'input', label: 'Amount' },
   { key: 'quote', label: 'Review' },
-  { key: 'kyc', label: 'Verify' },
   { key: 'payment', label: 'Pay' },
   { key: 'complete', label: 'Done' },
 ]
