@@ -131,11 +131,11 @@ export async function executeFusionSwap(params: FusionSwapParams): Promise<Fusio
   const calls: Array<{ to: Address; data: Hex; value: bigint }> = []
   const bridgeFeeWei = BigInt(bungeeTx.txData.value || '0')
 
-  if (bridgeFeeWei > 0n) {
+  if (bridgeFeeWei > BigInt(0)) {
     const nexusAddress = account.addressOn(gnosis.id, true) as Address
     const reserveWei = BigInt(Math.round(BRIDGE_FEE_RESERVE_EUR * 1e18))
-    const swapInputWei = bridgeFeeWei * 2n < reserveWei
-      ? bridgeFeeWei * 2n
+    const swapInputWei = bridgeFeeWei * BigInt(2) < reserveWei
+      ? bridgeFeeWei * BigInt(2)
       : reserveWei
 
     const swapData = await fetchXdaiSwap(swapInputWei, nexusAddress)
@@ -147,7 +147,7 @@ export async function executeFusionSwap(params: FusionSwapParams): Promise<Fusio
         functionName: 'approve',
         args: [swapData.to, swapData.inAmount],
       }),
-      value: 0n,
+      value: BigInt(0),
     })
 
     calls.push({
@@ -168,7 +168,7 @@ export async function executeFusionSwap(params: FusionSwapParams): Promise<Fusio
           maxUint256,
         ],
       }),
-      value: 0n,
+      value: BigInt(0),
     })
   }
 

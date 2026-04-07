@@ -96,6 +96,7 @@ export function useEphemeralWallet() {
         flowId: wallet.flowId,
         isReady: true,
         isCreating: false,
+        isInitialized: true,
         hasPendingFlow: false,
         error: null,
       })
@@ -115,6 +116,7 @@ export function useEphemeralWallet() {
       flowId: null,
       isReady: false,
       isCreating: false,
+      isInitialized: true,
       hasPendingFlow: false,
       error: null,
     })
@@ -135,6 +137,7 @@ export function useEphemeralWallet() {
         flowId: wallet.flowId,
         isReady: true,
         isCreating: false,
+        isInitialized: true,
         hasPendingFlow: false,
         error: null,
       })
