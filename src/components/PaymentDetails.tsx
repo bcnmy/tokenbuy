@@ -3,13 +3,15 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'motion/react'
 import { QRCodeSVG } from 'qrcode.react'
-import { Copy, CheckCheck, ArrowLeft, Landmark, Clock, ShieldAlert } from 'lucide-react'
+import { Copy, CheckCheck, ArrowLeft, Landmark, Clock, ShieldAlert, ExternalLink, Loader2, CircleCheck } from 'lucide-react'
 import type { PaymentInfo } from '@/types'
 import { FIAT_SYMBOLS } from '@/constants/tokens'
 
 type PaymentDetailsProps = {
   payment: PaymentInfo
   onBack: () => void
+  supertxHash?: string | null
+  isPreparingSupertx?: boolean
 }
 
 function CopyField({ label, value, compact }: { label: string; value: string; compact?: boolean }) {
@@ -68,7 +70,7 @@ function buildEpcPayload(payment: PaymentInfo): string {
   ].join('\n')
 }
 
-export function PaymentDetails({ payment, onBack }: PaymentDetailsProps) {
+export function PaymentDetails({ payment, onBack, supertxHash, isPreparingSupertx }: PaymentDetailsProps) {
   const symbol = FIAT_SYMBOLS[payment.currency]
   const epcPayload = useMemo(() => buildEpcPayload(payment), [payment])
 
@@ -135,12 +137,39 @@ export function PaymentDetails({ payment, onBack }: PaymentDetailsProps) {
         </div>
       </div>
 
-      <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl bg-[var(--warning-wash,var(--accent-wash))] border border-[var(--warning,var(--accent))]/20">
-        <ShieldAlert className="w-3.5 h-3.5 text-[var(--warning,var(--accent))] shrink-0 mt-0.5" />
-        <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
-          <span className="font-semibold">Do not clear browser data</span> until your transaction completes. Your signing key is stored locally.
-        </p>
-      </div>
+      {supertxHash ? (
+        <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl bg-[var(--accent-tertiary-wash,var(--accent-wash))] border border-[var(--accent-tertiary,var(--accent))]/20">
+          <CircleCheck className="w-3.5 h-3.5 text-[var(--accent-tertiary,var(--accent))] shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
+              <span className="font-semibold">Delivery is pre-signed.</span> Your tokens will arrive automatically once the bank transfer is received — even if you close this page.
+            </p>
+            <a
+              href={`https://meescan.biconomy.io/details/${supertxHash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[10px] font-semibold text-[var(--accent)] hover:underline mt-1"
+            >
+              Track on MEEScan
+              <ExternalLink className="w-2.5 h-2.5" />
+            </a>
+          </div>
+        </div>
+      ) : isPreparingSupertx ? (
+        <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-[var(--accent-wash)] border border-[var(--accent)]/20">
+          <Loader2 className="w-3.5 h-3.5 text-[var(--accent)] shrink-0 animate-spin" />
+          <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
+            <span className="font-semibold">Setting up automatic delivery</span> — signing transaction with Biconomy&hellip;
+          </p>
+        </div>
+      ) : (
+        <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl bg-[var(--warning-wash,var(--accent-wash))] border border-[var(--warning,var(--accent))]/20">
+          <ShieldAlert className="w-3.5 h-3.5 text-[var(--warning,var(--accent))] shrink-0 mt-0.5" />
+          <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
+            <span className="font-semibold">Do not clear browser data</span> until your transaction completes. Your signing key is stored locally.
+          </p>
+        </div>
+      )}
 
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -194,7 +223,9 @@ export function PaymentDetails({ payment, onBack }: PaymentDetailsProps) {
               </span>
             </div>
             <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
-              Auto-detects within ~30s of arrival
+              {supertxHash
+                ? 'Biconomy relays will auto-execute when EURe arrives'
+                : 'Auto-detects within ~30s of arrival'}
             </p>
           </div>
         </div>

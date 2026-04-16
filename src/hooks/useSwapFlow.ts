@@ -22,11 +22,12 @@ import {
   clearFlowState,
   watchForEureDeposit,
 } from '@/services/payment'
-import { getManualRouteQuote, buildBungeeTx } from '@/services/bungee'
-import { executeFusionSwap, getNexusAddress, BRIDGE_FEE_RESERVE_EUR } from '@/services/biconomy'
+import { getManualRouteQuote, buildBungeeTx, eureToWei } from '@/services/bungee'
+import { executeFusionSwap, getNexusAddress, BRIDGE_FEE_RESERVE_EUR, prepareSupertransaction } from '@/services/biconomy'
 import { DEFAULT_TOKEN, GBP_TO_EUR } from '@/constants/tokens'
 import * as logger from '@/services/logger'
-import type { Account, Chain, Transport, WalletClient } from 'viem'
+import type { Account, Address, Chain, Transport, WalletClient } from 'viem'
+import type { InputMode } from '@/types'
 
 type SwapFlowState = {
   step: FlowStep
@@ -43,6 +44,8 @@ type SwapFlowState = {
   transaction: Transaction | null
   transactionStatus: TransactionStatus | null
   pendingTxHash: string | null
+  supertxHash: string | null
+  isPreparingSupertx: boolean
   isWaitingForIban: boolean
   isLoading: boolean
   error: string | null
@@ -63,6 +66,8 @@ type SwapFlowAction =
   | { type: 'SET_PAYMENT_INFO'; info: PaymentInfo }
   | { type: 'SET_TRANSACTION_STATUS'; status: TransactionStatus }
   | { type: 'SET_PENDING_TX_HASH'; hash: string }
+  | { type: 'SET_SUPERTX_HASH'; hash: string }
+  | { type: 'SET_PREPARING_SUPERTX'; preparing: boolean }
   | { type: 'SET_TRANSACTION'; transaction: Transaction }
   | { type: 'WAITING_FOR_IBAN' }
   | { type: 'GO_TO_STEP'; step: FlowStep }
@@ -83,6 +88,8 @@ const initialState: SwapFlowState = {
   transaction: null,
   transactionStatus: null,
   pendingTxHash: null,
+  supertxHash: null,
+  isPreparingSupertx: false,
   isWaitingForIban: false,
   isLoading: false,
   error: null,
@@ -124,6 +131,10 @@ function reducer(state: SwapFlowState, action: SwapFlowAction): SwapFlowState {
       return { ...state, transactionStatus: action.status }
     case 'SET_PENDING_TX_HASH':
       return { ...state, pendingTxHash: action.hash }
+    case 'SET_SUPERTX_HASH':
+      return { ...state, supertxHash: action.hash, isPreparingSupertx: false }
+    case 'SET_PREPARING_SUPERTX':
+      return { ...state, isPreparingSupertx: action.preparing }
     case 'SET_TRANSACTION':
       return {
         ...state,
@@ -142,7 +153,7 @@ function reducer(state: SwapFlowState, action: SwapFlowAction): SwapFlowState {
   }
 }
 
-export function useSwapFlow(defaultFiat?: FiatCurrency) {
+export function useSwapFlow(defaultFiat?: FiatCurrency, mode?: InputMode) {
   const [state, dispatch] = useReducer(reducer, {
     ...initialState,
     fiatCurrency: defaultFiat ?? 'EUR',
@@ -191,6 +202,8 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
 
     if (!moneriumResult) return
 
+    console.log('[monerium] redirect return:', { result: moneriumResult, wallet, fullUrl: window.location.href })
+
     logger.logInfo('monerium', 'redirect_return', {
       result: moneriumResult,
       walletAddress: wallet ?? undefined,
@@ -205,15 +218,18 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
 
     if (moneriumResult === 'error') {
       const message = params.get('message') || 'Monerium authorization failed'
-      logger.logError('monerium', 'redirect_error', new Error(decodeURIComponent(message)), {
+      const decoded = decodeURIComponent(message)
+      console.error('[monerium] OAuth error:', decoded)
+      logger.logError('monerium', 'redirect_error', new Error(decoded), {
         walletAddress: wallet ?? undefined,
       })
-      dispatch({ type: 'SET_ERROR', error: decodeURIComponent(message) })
+      dispatch({ type: 'SET_ERROR', error: decoded })
       return
     }
 
     if (moneriumResult === 'success' && wallet) {
       const saved = loadFlowStateAfterRedirect()
+      console.log('[monerium] OAuth success, restored state:', saved)
       clearFlowState()
 
       logger.logInfo('monerium', 'redirect_success_restoring_flow', {
@@ -227,6 +243,9 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
         dispatch({ type: 'SET_FIAT_AMOUNT', amount: saved.fiatAmount })
         dispatch({ type: 'SET_FIAT_CURRENCY', currency: saved.fiatCurrency })
         dispatch({ type: 'SET_ADDRESS', address: saved.recipientAddress })
+        if (saved.selectedToken) {
+          dispatch({ type: 'SET_TOKEN', token: saved.selectedToken })
+        }
         if (saved.signerAddress) {
           dispatch({ type: 'SET_SIGNER_ADDRESS', address: saved.signerAddress })
         }
@@ -319,6 +338,87 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
     return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.isWaitingForIban])
+
+  // Pre-sign supertransaction when IBAN resolves in paste_address mode.
+  // MEE will hold the signed tx and auto-execute when EURe lands on-chain.
+  useEffect(() => {
+    if (mode !== 'paste_address') return
+    if (!state.paymentInfo) return
+    if (state.supertxHash || state.isPreparingSupertx) return
+
+    const wc = walletClientRef.current
+    if (!wc) return
+
+    dispatch({ type: 'SET_PREPARING_SUPERTX', preparing: true })
+
+    let cancelled = false
+
+    ;(async () => {
+      try {
+        const eurAmount = state.fiatCurrency === 'GBP'
+          ? parseFloat(state.fiatAmount) * GBP_TO_EUR
+          : parseFloat(state.fiatAmount)
+
+        const nexusAddress = await getNexusAddress(wc)
+
+        logger.logInfo('swap', 'preparing_supertx', {
+          walletAddress: state.recipientAddress,
+          nexusAddress,
+          eurAmount,
+          token: state.selectedToken.symbol,
+        })
+
+        const freshQuote = await getManualRouteQuote({
+          eurAmount: eurAmount - BRIDGE_FEE_RESERVE_EUR,
+          destinationChainId: state.selectedToken.chainId,
+          outputToken: state.selectedToken.address,
+          receiverAddress: nexusAddress,
+          userAddress: nexusAddress,
+        })
+
+        if (cancelled) return
+
+        const bungeeTx = await buildBungeeTx(freshQuote.quoteId)
+        if (cancelled) return
+
+        const result = await prepareSupertransaction({
+          walletClient: wc,
+          eureAmount: BigInt(eureToWei(eurAmount)),
+          bungeeTx,
+          recipientAddress: state.recipientAddress as Address,
+          destinationToken: state.selectedToken,
+          onStatusChange: (status) => {
+            logger.logInfo('swap', 'supertx_prep_status', { status })
+          },
+        })
+
+        if (cancelled) return
+
+        logger.logInfo('swap', 'supertx_submitted', {
+          hash: result.hash,
+          meeScanUrl: result.meeScanUrl,
+          recipientAddress: state.recipientAddress,
+        })
+
+        dispatch({ type: 'SET_SUPERTX_HASH', hash: result.hash })
+
+        walletClientRef.current = null
+      } catch (err) {
+        if (cancelled) return
+        logger.logError('swap', 'supertx_preparation_failed', err, {
+          walletAddress: state.recipientAddress,
+        })
+        dispatch({ type: 'SET_PREPARING_SUPERTX', preparing: false })
+        dispatch({
+          type: 'SET_ERROR',
+          error: err instanceof Error ? err.message : 'Failed to prepare transaction',
+        })
+      }
+    })()
+
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.paymentInfo, state.supertxHash, state.isPreparingSupertx, mode])
 
   const setFiatCurrency = useCallback((currency: FiatCurrency) => {
     dispatch({ type: 'SET_FIAT_CURRENCY', currency })
@@ -462,6 +562,8 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
         return
       }
 
+      console.log('[monerium] redirecting to auth URL:', result.authUrl)
+
       logger.logInfo('monerium', 'redirecting_to_auth', {
         walletAddress: moneriumWallet,
         fiatAmount: state.fiatAmount,
@@ -475,6 +577,7 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
         recipientAddress: state.recipientAddress,
         signerAddress: state.signerAddress || undefined,
         tokenSymbol: state.selectedToken.symbol,
+        selectedToken: state.selectedToken,
         flowId: state.flowId || undefined,
         savedAt: Date.now(),
       })
@@ -632,9 +735,11 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
 
   executeSwapRef.current = executeSwapAfterDeposit
 
-  // Auto-start watching for EURe deposit when entering the payment step
+  // Auto-start watching for EURe deposit when entering the payment step.
+  // Skipped in paste_address mode — MEE handles deposit detection via the pre-signed trigger.
   useEffect(() => {
     if (state.step !== 'payment' || !state.paymentInfo) return
+    if (mode === 'paste_address') return
 
     const depositWallet = state.signerAddress || state.recipientAddress
     if (!depositWallet) return
@@ -692,7 +797,7 @@ export function useSwapFlow(defaultFiat?: FiatCurrency) {
       abortController.abort()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.step, state.paymentInfo])
+  }, [state.step, state.paymentInfo, mode])
 
   const ESTIMATE_DEBOUNCE_MS = 600
 

@@ -395,6 +395,24 @@ export async function buildBungeeTx(quoteId: string, signal?: AbortSignal): Prom
 
 // --- Chain name lookup ---
 
+const CHAIN_NAME_DEFAULTS: Record<number, string> = {
+  1: 'Ethereum',
+  10: 'Optimism',
+  56: 'BNB Chain',
+  100: 'Gnosis',
+  137: 'Polygon',
+  324: 'zkSync Era',
+  8453: 'Base',
+  42161: 'Arbitrum',
+  43114: 'Avalanche',
+  250: 'Fantom',
+  59144: 'Linea',
+  534352: 'Scroll',
+  1101: 'Polygon zkEVM',
+  34443: 'Mode',
+  7777777: 'Zora',
+}
+
 const chainNameOverrides: Record<number, string> = {}
 
 export function registerChains(chains: Chain[]) {
@@ -404,7 +422,7 @@ export function registerChains(chains: Chain[]) {
 }
 
 export function getChainName(chainId: number): string {
-  return chainNameOverrides[chainId] ?? `Chain ${chainId}`
+  return chainNameOverrides[chainId] ?? CHAIN_NAME_DEFAULTS[chainId] ?? `Chain ${chainId}`
 }
 
 export function getChainColor(chainId: number): string {

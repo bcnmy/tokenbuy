@@ -1,13 +1,20 @@
 import crypto from 'crypto'
 
-const CREDENTIALS_CLIENT_ID = process.env.MONERIUM_CLIENT_ID!
-const CLIENT_SECRET = process.env.MONERIUM_CLIENT_SECRET!
-const OAUTH_CLIENT_ID = process.env.MONERIUM_OAUTH_CLIENT_ID!
+const CREDENTIALS_CLIENT_ID = process.env.MONERIUM_CLIENT_ID ?? ''
+const CLIENT_SECRET = process.env.MONERIUM_CLIENT_SECRET ?? ''
+const OAUTH_CLIENT_ID = process.env.MONERIUM_OAUTH_CLIENT_ID ?? ''
 const BASE_URL = process.env.MONERIUM_API_URL || 'https://api.monerium.app'
 const REDIRECT_URI = process.env.MONERIUM_REDIRECT_URI || 'http://localhost:3000/api/monerium/callback'
 
-const IS_SANDBOX = BASE_URL.includes('monerium.dev')
-export const MONERIUM_CHAIN = IS_SANDBOX ? 'chiado' : 'gnosis'
+console.log('[monerium] BASE_URL =', BASE_URL, '| REDIRECT_URI =', REDIRECT_URI)
+if (!OAUTH_CLIENT_ID) {
+  console.error('[monerium] MONERIUM_OAUTH_CLIENT_ID is not set – OAuth flow will fail')
+}
+if (!CREDENTIALS_CLIENT_ID || !CLIENT_SECRET) {
+  console.warn('[monerium] MONERIUM_CLIENT_ID or MONERIUM_CLIENT_SECRET missing – client-credentials grant will fail')
+}
+
+export const MONERIUM_CHAIN = 'gnosis'
 
 const V2_ACCEPT = 'application/vnd.monerium.api-v2+json'
 
@@ -36,6 +43,7 @@ export function buildAuthUrl(params: {
   chain?: string
 }): string {
   const url = new URL(`${BASE_URL}/auth`)
+  url.searchParams.set('response_type', 'code')
   url.searchParams.set('client_id', OAUTH_CLIENT_ID)
   url.searchParams.set('code_challenge', params.codeChallenge)
   url.searchParams.set('code_challenge_method', 'S256')
@@ -59,7 +67,9 @@ export async function exchangeCodeForTokens(
   code: string,
   codeVerifier: string,
 ): Promise<TokenResponse> {
-  const res = await fetch(`${BASE_URL}/auth/token`, {
+  const url = `${BASE_URL}/auth/token`
+  console.log('[monerium] exchangeCodeForTokens →', url)
+  const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -68,7 +78,8 @@ export async function exchangeCodeForTokens(
       code,
       code_verifier: codeVerifier,
       redirect_uri: REDIRECT_URI,
-    }),
+    }).toString(),
+    cache: 'no-store',
   })
 
   if (!res.ok) {
@@ -87,7 +98,8 @@ export async function refreshAccessToken(refreshToken: string): Promise<TokenRes
       grant_type: 'refresh_token',
       client_id: OAUTH_CLIENT_ID,
       refresh_token: refreshToken,
-    }),
+    }).toString(),
+    cache: 'no-store',
   })
 
   if (!res.ok) {
@@ -115,6 +127,7 @@ async function userApiRequest<T = unknown>(
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
     headers,
+    cache: 'no-store',
     ...(body ? { body: JSON.stringify(body) } : {}),
   })
 
@@ -212,7 +225,8 @@ export async function getAppAccessToken(): Promise<string> {
       grant_type: 'client_credentials',
       client_id: CREDENTIALS_CLIENT_ID,
       client_secret: CLIENT_SECRET,
-    }),
+    }).toString(),
+    cache: 'no-store',
   })
 
   if (!res.ok) {

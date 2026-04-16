@@ -9,6 +9,14 @@ import {
 } from '@/lib/monerium'
 import { logInfo, logWarn, logError } from '@/lib/logger'
 
+export const dynamic = 'force-dynamic'
+
+function errorRedirect(baseUrl: string, message: string) {
+  return NextResponse.redirect(
+    `${baseUrl}/?monerium=error&message=${encodeURIComponent(message)}`,
+  )
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const code = searchParams.get('code')
@@ -23,8 +31,7 @@ export async function GET(request: Request) {
       error,
       errorDescription: errorDescription ?? undefined,
     })
-    const msg = encodeURIComponent(errorDescription || error)
-    return NextResponse.redirect(`${baseUrl}/?monerium=error&message=${msg}`)
+    return errorRedirect(baseUrl, errorDescription || error)
   }
 
   if (!code || !state) {
@@ -32,32 +39,34 @@ export async function GET(request: Request) {
       hasCode: !!code,
       hasState: !!state,
     })
-    return NextResponse.redirect(`${baseUrl}/?monerium=error&message=Missing+authorization+code`)
+    return errorRedirect(baseUrl, 'Missing authorization code')
   }
 
-  await ensureMigrations()
-  const db = getDb()
-
-  const authResult = await db.execute({
-    sql: 'SELECT code_verifier, wallet_address FROM monerium_auth_state WHERE state = ?',
-    args: [state],
-  })
-  const authState = authResult.rows[0]
-
-  if (!authState) {
-    await logWarn('monerium', 'monerium_callback_invalid_state', { state })
-    return NextResponse.redirect(`${baseUrl}/?monerium=error&message=Invalid+or+expired+state`)
-  }
-
-  const walletAddress = authState.wallet_address as string
-  await logInfo('monerium', 'monerium_callback_processing', { walletAddress, state })
-
-  await db.execute({
-    sql: 'DELETE FROM monerium_auth_state WHERE state = ?',
-    args: [state],
-  })
+  let walletAddress = ''
 
   try {
+    await ensureMigrations()
+    const db = getDb()
+
+    const authResult = await db.execute({
+      sql: 'SELECT code_verifier, wallet_address FROM monerium_auth_state WHERE state = ?',
+      args: [state],
+    })
+    const authState = authResult.rows[0]
+
+    if (!authState) {
+      await logWarn('monerium', 'monerium_callback_invalid_state', { state })
+      return errorRedirect(baseUrl, 'Invalid or expired state')
+    }
+
+    walletAddress = authState.wallet_address as string
+    await logInfo('monerium', 'monerium_callback_processing', { walletAddress, state })
+
+    await db.execute({
+      sql: 'DELETE FROM monerium_auth_state WHERE state = ?',
+      args: [state],
+    })
+
     const tokens = await exchangeCodeForTokens(code, authState.code_verifier as string)
     await logInfo('monerium', 'monerium_tokens_exchanged', { walletAddress })
 
@@ -144,8 +153,15 @@ export async function GET(request: Request) {
     const wallet = encodeURIComponent(walletAddress)
     return NextResponse.redirect(`${baseUrl}/?monerium=success&wallet=${wallet}`)
   } catch (err) {
-    await logError('monerium', 'monerium_callback_error', err, { walletAddress })
-    const msg = encodeURIComponent(err instanceof Error ? err.message : 'Authorization failed')
-    return NextResponse.redirect(`${baseUrl}/?monerium=error&message=${msg}`)
+    const cause = err instanceof Error && 'cause' in err ? (err.cause as Error) : undefined
+    const detail = cause?.message || (err instanceof Error ? err.message : 'Authorization failed')
+    console.error('[monerium] callback error:', err)
+    if (cause) console.error('[monerium] cause:', cause)
+    await logError('monerium', 'monerium_callback_error', err, {
+      walletAddress: walletAddress || undefined,
+      cause: cause?.message,
+      code: (cause as NodeJS.ErrnoException)?.code,
+    })
+    return errorRedirect(baseUrl, detail)
   }
 }

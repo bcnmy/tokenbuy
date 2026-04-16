@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { Sora, IBM_Plex_Mono, Inter, DM_Sans } from 'next/font/google'
 import { SystemThemeSync } from '@/components/SystemThemeSync'
-import { Web3Provider } from '@/components/Web3Provider'
+import { ClientProviders } from '@/components/ClientProviders'
 import './globals.css'
 
 const themeScript = `(function(){try{if(window.matchMedia('(prefers-color-scheme:dark)').matches)document.documentElement.classList.add('dark')}catch(e){}})()`
@@ -69,9 +69,9 @@ export default function RootLayout({
         style={{ fontFamily: 'var(--font-sora), system-ui, sans-serif' }}
       >
         <SystemThemeSync />
-        <Web3Provider>
+        <ClientProviders>
           {children}
-        </Web3Provider>
+        </ClientProviders>
       </body>
     </html>
   )

@@ -9,6 +9,8 @@ import {
 } from '@/lib/monerium'
 import { logInfo, logError } from '@/lib/logger'
 
+export const dynamic = 'force-dynamic'
+
 export async function POST(request: Request) {
   try {
     const { walletAddress, signature, email } = await request.json()
@@ -16,6 +18,14 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: 'walletAddress is required' },
         { status: 400 },
+      )
+    }
+
+    if (!process.env.MONERIUM_OAUTH_CLIENT_ID) {
+      await logError('monerium', 'monerium_missing_client_id', new Error('MONERIUM_OAUTH_CLIENT_ID is not configured'))
+      return NextResponse.json(
+        { error: 'Monerium OAuth is not configured. Set MONERIUM_OAUTH_CLIENT_ID.' },
+        { status: 500 },
       )
     }
 
@@ -42,7 +52,7 @@ export async function POST(request: Request) {
       chain: MONERIUM_CHAIN,
     })
 
-    await logInfo('monerium', 'monerium_auth_url_generated', { walletAddress, state })
+    await logInfo('monerium', 'monerium_auth_url_generated', { walletAddress, state, authUrl })
     return NextResponse.json({ authUrl })
   } catch (err) {
     await logError('monerium', 'monerium_auth_error', err)

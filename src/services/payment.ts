@@ -1,6 +1,6 @@
 import { createPublicClient, http, type Address } from 'viem'
 import { gnosis } from 'viem/chains'
-import type { PaymentInfo, FiatCurrency, Transaction, Token } from '@/types'
+import type { PaymentInfo, FiatCurrency, Transaction, Token, Hex } from '@/types'
 import { EURE_GNOSIS } from './bungee'
 
 type IbanResponse = {
@@ -30,6 +30,7 @@ export type SavedFlowState = {
   recipientAddress: string
   signerAddress?: string
   tokenSymbol: string
+  selectedToken?: Token
   flowId?: string
   savedAt: number
 }

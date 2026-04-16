@@ -25,9 +25,9 @@ import type { InputMode } from '@/types'
 
 export function SwapCard() {
   const theme = useWidgetTheme()
-  const flow = useSwapFlow(theme?.defaultFiat)
-  const [tokenSelectorOpen, setTokenSelectorOpen] = useState(false)
   const [mode, setMode] = useState<InputMode>('connect_wallet')
+  const flow = useSwapFlow(theme?.defaultFiat, mode)
+  const [tokenSelectorOpen, setTokenSelectorOpen] = useState(false)
   const [email, setEmail] = useState('')
   const [showRecovery, setShowRecovery] = useState(false)
   const { isConnected } = useAccount()
@@ -95,6 +95,15 @@ export function SwapCard() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flow.step])
+
+  // In paste_address mode, destroy ephemeral wallet once the supertx is submitted
+  // (the key has already signed everything MEE needs; it can be forgotten)
+  useEffect(() => {
+    if (flow.supertxHash && ephemeral.isReady) {
+      ephemeral.destroy()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flow.supertxHash])
 
   const handleReset = useCallback(() => {
     ephemeral.destroy()
@@ -439,6 +448,8 @@ export function SwapCard() {
                 key="payment"
                 payment={flow.paymentInfo}
                 onBack={flow.goBack}
+                supertxHash={flow.supertxHash}
+                isPreparingSupertx={flow.isPreparingSupertx}
               />
             )}
 
